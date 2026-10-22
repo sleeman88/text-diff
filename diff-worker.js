@@ -173,6 +173,55 @@ function compareGap(left, right, startA, endA, startB, endB, deadline, leftRange
   return false;
 }
 
+// Recognize *structural* newline differences separately from changed text.
+// A newline is marked only where two consecutive equal tokens are adjacent
+// in BOTH documents and the separating gaps contain different line counts.
+// This avoids false markers after a changed/deleted sentence or at a normal
+// end of line. If a gap has three newlines versus one, the two surplus
+// newlines are marked, so the extra blank lines themselves are highlighted.
+function detectNewlineChanges(left, right, A, B, matches) {
+  const leftBreaks = [], rightBreaks = [];
+
+  function addSurplus(text, from, to, count, out) {
+    if (count <= 0) return;
+    const found = [];
+    for (let i = from; i < to; i++) {
+      if (text[i] === "\n") found.push(i);
+    }
+    // The final extra newlines create the additional empty rows.
+    for (const pos of found.slice(-count)) out.push(pos);
+  }
+
+  // Require stable neighboring matched anchors. Harmless bullet/option
+  // punctuation between them may differ; substantive inserted/deleted text
+  // must prevent a break marker, or normal newlines will be falsely flagged.
+  const minorOnly = (tokens, from, to) => {
+    if (to - from > 3) return false;
+    for (let k = from; k < to; k++) {
+      if (/[\p{L}\p{N}]/u.test(tokens[k].value)) return false;
+    }
+    return true;
+  };
+  let previous = null;
+  for (const [ai, bi] of matches) {
+    if (previous && ai > previous[0] && bi > previous[1] &&
+        minorOnly(A, previous[0] + 1, ai) &&
+        minorOnly(B, previous[1] + 1, bi)) {
+      const aFrom = A[previous[0]].to;
+      const aTo = A[ai].from;
+      const bFrom = B[previous[1]].to;
+      const bTo = B[bi].from;
+      let ac = 0, bc = 0;
+      for (let i = aFrom; i < aTo; i++) if (left[i] === "\n") ac++;
+      for (let i = bFrom; i < bTo; i++) if (right[i] === "\n") bc++;
+      if (ac > bc) addSurplus(left, aFrom, aTo, ac - bc, leftBreaks);
+      if (bc > ac) addSurplus(right, bFrom, bTo, bc - ac, rightBreaks);
+    }
+    previous = [ai, bi];
+  }
+  return {leftBreaks, rightBreaks};
+}
+
 function compute(left, right) {
   if (left.length > MAX_CHARS || right.length > MAX_CHARS) {
     throw new Error("The document is too large for this browser tool. Please compare smaller sections.");
@@ -238,7 +287,8 @@ function compute(left, right) {
   }
   if (compareGap(left, right, leftEnd, left.length, rightEnd, right.length,
                  deadline, leftRanges, rightRanges)) degraded = true;
-  return {leftRanges, rightRanges, degraded};
+  const newlineChanges = detectNewlineChanges(left, right, A, B, matches);
+  return {leftRanges, rightRanges, ...newlineChanges, degraded};
 }
 
 self.onmessage = event => {

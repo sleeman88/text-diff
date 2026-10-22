@@ -14,6 +14,7 @@
   let syncing = false;
   const overlayTexts = ["", ""];
   const overlayRanges = [[], []];
+  const overlayBreaks = [[], []];
   const pendingFrames = [null, null];
 
   function cancelJob() {
@@ -56,7 +57,7 @@
     pendingFrames[index] = requestAnimationFrame(() => {
       pendingFrames[index] = null;
       if (!highlighted) return;
-      renderText(contents[index], overlayTexts[index], overlayRanges[index]);
+      renderText(contents[index], overlayTexts[index], overlayRanges[index], overlayBreaks[index]);
       positionOverlay(index);
     });
   }
@@ -64,8 +65,9 @@
   // Rebuild the text as explicit line elements. A changed newline becomes a
   // line-level annotation. It does not depend on getBoundingClientRect() of a
   // zero-width newline, and empty rows have their own visible background.
-  function renderText(element, text, ranges) {
+  function renderText(element, text, ranges, breakPositions) {
     const fragment = document.createDocumentFragment();
+    const changedBreaks = new Set(breakPositions);
     let lineStart = 0;
     let searchFrom = 0;
     let rangeAt = 0;
@@ -97,11 +99,10 @@
       if (at < lineEnd) line.appendChild(document.createTextNode(text.slice(at, lineEnd)));
 
       if (next !== -1) {
-        // A difference of the newline *character* annotates its source line.
-        // For a blank line this shades the whole blank row.
-        while (rangeAt < ranges.length && ranges[rangeAt][1] <= next) rangeAt++;
-        if (rangeAt < ranges.length &&
-            ranges[rangeAt][0] <= next && ranges[rangeAt][1] > next) {
+        // Mark only confirmed structural newline differences. Other edits
+        // may include a newline in their text range, but that alone does not
+        // mean the line break has changed between the documents.
+        if (changedBreaks.has(next)) {
           line.classList.add("break-changed");
           if (lineStart < lineEnd) {
             // The indicator is visual only; it contributes no character and
@@ -129,7 +130,8 @@
       }
       overlayTexts[i] = values[i];
       overlayRanges[i] = (i === 0 ? data.leftRanges : data.rightRanges);
-      renderText(contents[i], overlayTexts[i], overlayRanges[i]);
+      overlayBreaks[i] = (i === 0 ? data.leftBreaks : data.rightBreaks) || [];
+      renderText(contents[i], overlayTexts[i], overlayRanges[i], overlayBreaks[i]);
     }
     for (let i = 0; i < 2; i++) {
       outputs[i].hidden = false;
@@ -146,7 +148,7 @@
     const values = textareas.map(element => element.value);
     status.textContent = "Comparing texts.";
     try {
-      const newWorker = new Worker("diff-worker.js?v=newline-anchor-20261022-2");
+      const newWorker = new Worker("diff-worker.js?v=precise-linebreak-20261022-3");
       worker = newWorker;
       newWorker.onmessage = event => {
         if (job !== currentJob) return;
@@ -188,6 +190,10 @@
       if (highlighted) {
         const nextText = textareas[i].value;
         if (nextText !== overlayTexts[i]) {
+          overlayBreaks[i] = transformRanges(
+            overlayBreaks[i].map(p => [p, p + 1]), overlayTexts[i], nextText
+          ).filter(r => r[1] - r[0] === 1 && nextText[r[0]] === "\n")
+            .map(r => r[0]);
           overlayRanges[i] = transformRanges(overlayRanges[i], overlayTexts[i], nextText);
           overlayTexts[i] = nextText;
           scheduleOverlayRender(i);

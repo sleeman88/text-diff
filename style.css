@@ -42,8 +42,8 @@ body { min-height: 100vh; }
   background: #d9efff;
   box-shadow: inset 4px 0 #4a9bd7;
 }
-/* A zero-width inline anchor draws a small rectangle at the exact end of a
-   nonempty line without adding a glyph or changing line wrapping. */
+/* A confirmed extra newline gets a thin red stroke at its line ending.
+   The stroke does not occupy text space or introduce visible glyphs. */
 .diff-line .break-indicator {
   display: inline;
   position: relative;
@@ -55,13 +55,13 @@ body { min-height: 100vh; }
   position: absolute;
   left: 0;
   bottom: -.1em;
-  width: 5px;
-  height: 1.1em;
-  border-radius: 1px;
+  width: 2px;
+  height: .95em;
+  border-radius: 0;
   pointer-events: none;
 }
-.diff-output.removed .break-indicator::after { background: #edae4f; }
-.diff-output.added .break-indicator::after { background: #64ade5; }
+.diff-output.removed .break-indicator::after,
+.diff-output.added .break-indicator::after { background: #bd4343; }
 /* Never inject bullets/dots/arrows into whitespace or ordinary differences. */
 .diff-line mark::before, .diff-line mark::after { content: none !important; }
 .actions { margin-top: 18px; display: flex; align-items: center; justify-content: center; }
