@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Text Diff</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="script.js" defer></script>
+</head>
+<body>
+  <main class="workspace" aria-label="Text comparison">
+    <section class="panes" aria-label="Texts to compare">
+      <div class="pane" id="left-pane">
+        <textarea id="left-text" aria-label="Original text" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off"></textarea>
+        <div class="diff-output removed" id="left-output" role="region" aria-label="Original text differences" tabindex="0" hidden></div>
+      </div>
+      <div class="pane" id="right-pane">
+        <textarea id="right-text" aria-label="Revised text" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off"></textarea>
+        <div class="diff-output added" id="right-output" role="region" aria-label="Revised text differences" tabindex="0" hidden></div>
+      </div>
+    </section>
+    <div class="actions"><button id="compare" type="button">Compare</button></div>
+    <div class="visually-hidden" role="status" aria-live="polite" id="status"></div>
+  </main>
+</body>
+</html>
