@@ -148,7 +148,7 @@
     const values = textareas.map(element => element.value);
     status.textContent = "Comparing texts.";
     try {
-      const newWorker = new Worker("diff-worker.js?v=precise-linebreak-20261022-3");
+      const newWorker = new Worker("diff-worker.js?v=lexical-breaks-20261022-4");
       worker = newWorker;
       newWorker.onmessage = event => {
         if (job !== currentJob) return;

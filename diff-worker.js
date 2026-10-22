@@ -173,51 +173,71 @@ function compareGap(left, right, startA, endA, startB, endB, deadline, leftRange
   return false;
 }
 
-// Recognize *structural* newline differences separately from changed text.
-// A newline is marked only where two consecutive equal tokens are adjacent
-// in BOTH documents and the separating gaps contain different line counts.
-// This avoids false markers after a changed/deleted sentence or at a normal
-// end of line. If a gap has three newlines versus one, the two surplus
-// newlines are marked, so the extra blank lines themselves are highlighted.
-function detectNewlineChanges(left, right, A, B, matches) {
+// A line break is a difference only when it occurs between the SAME
+// consecutive matching lexical tokens in both documents. Deleted headings,
+// moved sentences and wholly inserted lines must not cause their routine
+// line endings to be highlighted as extra independent edits.
+function detectNewlineChanges(left, right, A, B, alignedMatches) {
   const leftBreaks = [], rightBreaks = [];
+  const lexical = token => /[\p{L}\p{N}]/u.test(token.value);
 
-  function addSurplus(text, from, to, count, out) {
-    if (count <= 0) return;
-    const found = [];
-    for (let i = from; i < to; i++) {
-      if (text[i] === "\n") found.push(i);
-    }
-    // The final extra newlines create the additional empty rows.
-    for (const pos of found.slice(-count)) out.push(pos);
+  function countBreaks(text, start, end) {
+    let count = 0;
+    for (let i = start; i < end; i++) if (text[i] === "\n") count++;
+    return count;
   }
-
-  // Require stable neighboring matched anchors. Harmless bullet/option
-  // punctuation between them may differ; substantive inserted/deleted text
-  // must prevent a break marker, or normal newlines will be falsely flagged.
-  const minorOnly = (tokens, from, to) => {
-    if (to - from > 3) return false;
-    for (let k = from; k < to; k++) {
-      if (/[\p{L}\p{N}]/u.test(tokens[k].value)) return false;
+  function addSurplus(text, start, end, count, output) {
+    if (count <= 0) return;
+    const positions = [];
+    for (let i = start; i < end; i++) if (text[i] === "\n") positions.push(i);
+    // The first newline is the original line ending; later newlines are
+    // surplus empty lines. For a one-versus-zero break, mark the only break.
+    for (const pos of positions.slice(-count)) output.push(pos);
+  }
+  function reconcile(aFrom, aTo, bFrom, bTo) {
+    const ac = countBreaks(left, aFrom, aTo);
+    const bc = countBreaks(right, bFrom, bTo);
+    if (ac > bc) addSurplus(left, aFrom, aTo, ac - bc, leftBreaks);
+    if (bc > ac) addSurplus(right, bFrom, bTo, bc - ac, rightBreaks);
+  }
+  function noLexicalTokens(tokens, start, end) {
+    for (let k = start; k < end; k++) {
+      if (lexical(tokens[k])) return false;
     }
     return true;
-  };
-  let previous = null;
-  for (const [ai, bi] of matches) {
-    if (previous && ai > previous[0] && bi > previous[1] &&
-        minorOnly(A, previous[0] + 1, ai) &&
-        minorOnly(B, previous[1] + 1, bi)) {
-      const aFrom = A[previous[0]].to;
-      const aTo = A[ai].from;
-      const bFrom = B[previous[1]].to;
-      const bTo = B[bi].from;
-      let ac = 0, bc = 0;
-      for (let i = aFrom; i < aTo; i++) if (left[i] === "\n") ac++;
-      for (let i = bFrom; i < bTo; i++) if (right[i] === "\n") bc++;
-      if (ac > bc) addSurplus(left, aFrom, aTo, ac - bc, leftBreaks);
-      if (bc > ac) addSurplus(right, bFrom, bTo, bc - ac, rightBreaks);
-    }
-    previous = [ai, bi];
+  }
+
+  const anchors = alignedMatches.filter(([ai, bi]) => lexical(A[ai]) && lexical(B[bi]));
+  if (!anchors.length) return {leftBreaks, rightBreaks};
+
+  // An unmatched leading heading is NOT a blank-line addition. Compare
+  // leading whitespace only if both documents start with the same first word.
+  const [firstA, firstB] = anchors[0];
+  if (noLexicalTokens(A, 0, firstA) && noLexicalTokens(B, 0, firstB) &&
+      /^\s*$/u.test(left.slice(0, A[firstA].from)) &&
+      /^\s*$/u.test(right.slice(0, B[firstB].from))) {
+    reconcile(0, A[firstA].from, 0, B[firstB].from);
+  }
+
+  for (let i = 1; i < anchors.length; i++) {
+    const [aPrevious, bPrevious] = anchors[i - 1];
+    const [aCurrent, bCurrent] = anchors[i];
+    if (aCurrent <= aPrevious || bCurrent <= bPrevious) continue;
+    // These lexical tokens must be immediate textual neighbors in BOTH
+    // documents; punctuation/bullets between them are permitted. Any
+    // inserted or deleted word makes the gap structurally ambiguous.
+    if (!noLexicalTokens(A, aPrevious + 1, aCurrent) ||
+        !noLexicalTokens(B, bPrevious + 1, bCurrent)) continue;
+    reconcile(A[aPrevious].to, A[aCurrent].from,
+              B[bPrevious].to, B[bCurrent].from);
+  }
+
+  // Compare trailing line breaks only when the last shared lexical token
+  // is the last lexical token in BOTH documents (no deleted ending paragraph).
+  const [lastA, lastB] = anchors[anchors.length - 1];
+  if (noLexicalTokens(A, lastA + 1, A.length) &&
+      noLexicalTokens(B, lastB + 1, B.length)) {
+    reconcile(A[lastA].to, left.length, B[lastB].to, right.length);
   }
   return {leftBreaks, rightBreaks};
 }
@@ -276,10 +296,12 @@ function compute(left, right) {
   // content across line wraps. The final diff DOES compare spaces and line breaks.
   matches.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
   const leftRanges = [], rightRanges = [];
+  const alignedMatches = [];
   let leftEnd = 0, rightEnd = 0;
   for (const [ai, bi] of matches) {
     const la = A[ai], rb = B[bi];
     if (la.from < leftEnd || rb.from < rightEnd) continue;
+    alignedMatches.push([ai, bi]);
     if (compareGap(left, right, leftEnd, la.from, rightEnd, rb.from,
                    deadline, leftRanges, rightRanges)) degraded = true;
     leftEnd = la.to;
@@ -287,7 +309,7 @@ function compute(left, right) {
   }
   if (compareGap(left, right, leftEnd, left.length, rightEnd, right.length,
                  deadline, leftRanges, rightRanges)) degraded = true;
-  const newlineChanges = detectNewlineChanges(left, right, A, B, matches);
+  const newlineChanges = detectNewlineChanges(left, right, A, B, alignedMatches);
   return {leftRanges, rightRanges, ...newlineChanges, degraded};
 }
 
