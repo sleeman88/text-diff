@@ -9,12 +9,15 @@
   let worker = null;
   let currentJob = 0;
   let stopTimer = null;
+  let lastSelectedPane = 0;
 
   function showEditor() {
     clearTimeout(stopTimer);
     if (worker) { worker.terminate(); worker = null; }
     currentJob++;
     mode = "edit";
+    // Clear any text selection left in the result view before showing editors.
+    window.getSelection()?.removeAllRanges();
     for (let i = 0; i < 2; i++) {
       textareas[i].hidden = false;
       outputs[i].hidden = true;
@@ -67,6 +70,8 @@
     compare.disabled = false;
     compare.textContent = "Edit";
     status.textContent = "Comparison complete.";
+    lastSelectedPane = 0;
+    outputs[0].focus({preventScroll: true});
   }
 
   function runComparison() {
@@ -125,6 +130,56 @@
   }
 
   compare.addEventListener("click", runComparison);
+
+  // A rendered diff is an HTML region, not a textarea. Without explicit
+  // handling, Ctrl/Cmd+A selects the entire page (including the other pane
+  // and the Edit button) instead of just the chosen result.
+  function paneForNode(node) {
+    for (let i = 0; i < outputs.length; i++) {
+      if (node && outputs[i].contains(node)) return i;
+    }
+    return -1;
+  }
+
+  for (let i = 0; i < outputs.length; i++) {
+    outputs[i].addEventListener("pointerdown", () => { lastSelectedPane = i; });
+    outputs[i].addEventListener("focusin", () => { lastSelectedPane = i; });
+  }
+
+  document.addEventListener("keydown", event => {
+    if (mode !== "result" || !(event.ctrlKey || event.metaKey) ||
+        event.altKey || event.shiftKey || event.key.toLowerCase() !== "a") return;
+    event.preventDefault();
+    const focusedPane = paneForNode(document.activeElement);
+    const output = outputs[focusedPane >= 0 ? focusedPane : lastSelectedPane];
+    output.focus({preventScroll: true});
+    const range = document.createRange();
+    range.selectNodeContents(output);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+  });
+
+  // If a mouse drag extends beyond its starting pane, clamp the selection to
+  // the pane boundary so text from the other pane / button is never included.
+  document.addEventListener("selectionchange", () => {
+    if (mode !== "result") return;
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed || !selection.anchorNode || !selection.focusNode) return;
+    const paneIndex = paneForNode(selection.anchorNode);
+    if (paneIndex < 0 || paneForNode(selection.focusNode) === paneIndex) return;
+    lastSelectedPane = paneIndex;
+    const output = outputs[paneIndex];
+    const paneRange = document.createRange();
+    paneRange.selectNodeContents(output);
+    try {
+      const position = paneRange.comparePoint(selection.focusNode, selection.focusOffset);
+      selection.setBaseAndExtent(selection.anchorNode, selection.anchorOffset,
+        output, position < 0 ? 0 : output.childNodes.length);
+    } catch (_) {
+      // Ignore selection states that become stale during a re-render.
+    }
+  });
 
   // Keep corresponding positions in view while browsing the results.
   let syncing = false;
