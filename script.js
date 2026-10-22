@@ -73,23 +73,19 @@
   }
 
   function renderText(element, value, ranges) {
-    // Only changed spans become elements. Unchanged spans are plain text nodes.
-    if (ranges.length > 9000) {
-      const merged = [];
-      for (const [start, end] of ranges) {
-        const previous = merged[merged.length - 1];
-        if (previous && start - previous[1] < 120) previous[1] = end;
-        else merged.push([start, end]);
-      }
-      ranges = merged;
-    }
+    // Render exactly the changed characters. Do not merge changes over
+    // unchanged text: even a single unchanged space is significant.
     const fragment = document.createDocumentFragment();
     let previous = 0;
     for (const [start, end] of ranges) {
       if (start < previous || end > value.length || start >= end) continue;
       if (start > previous) fragment.appendChild(document.createTextNode(value.slice(previous, start)));
       const mark = document.createElement("mark");
-      mark.textContent = value.slice(start, end);
+      const changed = value.slice(start, end);
+      mark.textContent = changed;
+      // Whitespace-only differences are otherwise almost invisible. Draw a
+      // small centered dot without replacing the actual space character.
+      if (/^[ \t]+$/u.test(changed)) mark.classList.add("whitespace-change");
       fragment.appendChild(mark);
       previous = end;
     }
@@ -124,7 +120,7 @@
     const values = textareas.map(element => element.value);
     status.textContent = "Comparing texts.";
     try {
-      const newWorker = new Worker("diff-worker.js");
+      const newWorker = new Worker("diff-worker.js?v=precise-whitespace-1");
       worker = newWorker;
       newWorker.onmessage = event => {
         if (job !== currentJob) return;

@@ -1,9 +1,11 @@
 "use strict";
 
-// Independent, dependency-free hierarchical token diff.
-// Whitespace variations are ignored for alignment; original layout is retained.
+// Independent, dependency-free hierarchical diff.
+// Word tokens anchor large texts; gaps (including whitespace) are compared character by character.
 const WORD = /[\p{L}\p{N}]+(?:['’][\p{L}\p{N}]+)*|[^\s]/gu;
 const MAX_CHARS = 8_000_000;
+const CHAR_MAX_LENGTH = 6000;
+const CHAR_MAX_D = 400;
 const MAX_WORK_MS = 18_000;
 const MYERS_MAX_LENGTH = 1800;
 const MYERS_MAX_D = 190;
@@ -17,12 +19,11 @@ function tokenize(input) {
   return items;
 }
 
-function pushMarked(ranges, list, startIndex, endIndex) {
-  if (endIndex <= startIndex) return;
-  const start = list[startIndex].from;
-  const end = list[endIndex - 1].to;
+// Merge adjacent edits, never unrelated text separated by unchanged spaces.
+function appendRange(ranges, start, end) {
+  if (end <= start) return;
   const last = ranges[ranges.length - 1];
-  if (last && /^\s*$/u.test(list._source.slice(last[1], start))) last[1] = end;
+  if (last && start <= last[1]) last[1] = Math.max(last[1], end);
   else ranges.push([start, end]);
 }
 
@@ -82,10 +83,10 @@ function addAnchors(A, B, a0, a1, b0, b1, width) {
   return anchors;
 }
 
-function findMyers(A, B, a0, a1, b0, b1, deadline) {
+function findMyers(A, B, a0, a1, b0, b1, deadline, maxLength = MYERS_MAX_LENGTH, maxDistance = MYERS_MAX_D) {
   const n = a1 - a0, m = b1 - b0;
-  if (n + m > MYERS_MAX_LENGTH) return null;
-  const maxD = Math.min(n + m, MYERS_MAX_D);
+  if (n + m > maxLength) return null;
+  const maxD = Math.min(n + m, maxDistance);
   const offset = n + m + 1;
   const prev = new Int32Array(2 * offset + 3).fill(-1);
   prev[offset + 1] = 0;
@@ -130,40 +131,81 @@ function findMyers(A, B, a0, a1, b0, b1, deadline) {
   return steps;
 }
 
+// Within unaligned word regions, find the smallest character changes.
+// Because we operate on the original character offsets, a missing/extra space
+// is a one-character difference, not a changed word.
+function compareGap(left, right, startA, endA, startB, endB, deadline, leftRanges, rightRanges) {
+  while (startA < endA && startB < endB && left[startA] === right[startB]) {
+    startA++; startB++;
+  }
+  while (startA < endA && startB < endB && left[endA - 1] === right[endB - 1]) {
+    endA--; endB--;
+  }
+  if (startA === endA || startB === endB) {
+    appendRange(leftRanges, startA, endA);
+    appendRange(rightRanges, startB, endB);
+    return false;
+  }
+
+  const a = left.slice(startA, endA);
+  const b = right.slice(startB, endB);
+  // Avoid quadratic behavior on large, largely unrelated blocks.
+  if (a.length + b.length > CHAR_MAX_LENGTH) {
+    appendRange(leftRanges, startA, endA);
+    appendRange(rightRanges, startB, endB);
+    return true;
+  }
+  const A = Array.from({length: a.length}, (_, i) => ({value: a[i]}));
+  const B = Array.from({length: b.length}, (_, i) => ({value: b[i]}));
+  const steps = findMyers(A, B, 0, A.length, 0, B.length, deadline,
+                          CHAR_MAX_LENGTH, CHAR_MAX_D);
+  if (!steps) {
+    appendRange(leftRanges, startA, endA);
+    appendRange(rightRanges, startB, endB);
+    return true;
+  }
+  let i = startA, j = startB;
+  for (const op of steps) {
+    if (op === 0) { i++; j++; }
+    else if (op === 1) { appendRange(leftRanges, i, i + 1); i++; }
+    else { appendRange(rightRanges, j, j + 1); j++; }
+  }
+  return false;
+}
+
 function compute(left, right) {
   if (left.length > MAX_CHARS || right.length > MAX_CHARS) {
     throw new Error("The document is too large for this browser tool. Please compare smaller sections.");
   }
-  const startTime = Date.now(), deadline = startTime + MAX_WORK_MS;
+  const deadline = Date.now() + MAX_WORK_MS;
   const A = tokenize(left), B = tokenize(right);
-  A._source = left; B._source = right;
-  const leftRanges = [], rightRanges = [];
+  // Pairs of equal non-whitespace tokens provide reliable anchors.
+  // Whitespace is NOT discarded: every gap between anchors is compared later.
+  const matches = [];
   let degraded = false;
   const stack = [[0, A.length, 0, B.length, 0]];
 
   while (stack.length) {
     let [a0, a1, b0, b1, level] = stack.pop();
-    while (a0 < a1 && b0 < b1 && A[a0].value === B[b0].value) { a0++; b0++; }
-    while (a0 < a1 && b0 < b1 && A[a1-1].value === B[b1-1].value) { a1--; b1--; }
-    if (a0 === a1 || b0 === b1) {
-      pushMarked(leftRanges, A, a0, a1);
-      pushMarked(rightRanges, B, b0, b1);
-      continue;
+    while (a0 < a1 && b0 < b1 && A[a0].value === B[b0].value) {
+      matches.push([a0, b0]); a0++; b0++;
     }
+    while (a0 < a1 && b0 < b1 && A[a1-1].value === B[b1-1].value) {
+      matches.push([a1-1, b1-1]); a1--; b1--;
+    }
+    if (a0 === a1 || b0 === b1) continue;
     if (Date.now() > deadline || level >= 12) {
       degraded = true;
-      pushMarked(leftRanges, A, a0, a1);
-      pushMarked(rightRanges, B, b0, b1);
       continue;
     }
     const width = (a1-a0 + b1-b0 > 600) ? 7 : 3;
     const anchors = addAnchors(A, B, a0, a1, b0, b1, width);
     if (anchors.length) {
-      // Process in order (stack is LIFO): split into the gaps between exact anchor blocks.
       const gaps = [];
       let leftFrom = a0, rightFrom = b0;
       for (const [a,b,len] of anchors) {
         gaps.push([leftFrom, a, rightFrom, b, level+1]);
+        for (let j = 0; j < len; j++) matches.push([a+j,b+j]);
         leftFrom = a + len; rightFrom = b + len;
       }
       gaps.push([leftFrom, a1, rightFrom, b1, level+1]);
@@ -174,16 +216,28 @@ function compute(left, right) {
     if (steps) {
       let ai=a0, bi=b0;
       for (const op of steps) {
-        if (op === 0) { ai++; bi++; }
-        else if (op === 1) { pushMarked(leftRanges, A, ai, ai+1); ai++; }
-        else { pushMarked(rightRanges, B, bi, bi+1); bi++; }
+        if (op === 0) { matches.push([ai,bi]); ai++; bi++; }
+        else if (op === 1) ai++;
+        else bi++;
       }
-    } else {
-      degraded = true;
-      pushMarked(leftRanges, A, a0, a1);
-      pushMarked(rightRanges, B, b0, b1);
-    }
+    } else degraded = true;
   }
+
+  // The token alignment intentionally ignored whitespace to locate matching
+  // content across line wraps. The final diff DOES compare spaces and line breaks.
+  matches.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const leftRanges = [], rightRanges = [];
+  let leftEnd = 0, rightEnd = 0;
+  for (const [ai, bi] of matches) {
+    const la = A[ai], rb = B[bi];
+    if (la.from < leftEnd || rb.from < rightEnd) continue;
+    if (compareGap(left, right, leftEnd, la.from, rightEnd, rb.from,
+                   deadline, leftRanges, rightRanges)) degraded = true;
+    leftEnd = la.to;
+    rightEnd = rb.to;
+  }
+  if (compareGap(left, right, leftEnd, left.length, rightEnd, right.length,
+                 deadline, leftRanges, rightRanges)) degraded = true;
   return {leftRanges, rightRanges, degraded};
 }
 
