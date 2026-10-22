@@ -13,9 +13,24 @@ body { min-height: 100vh; }
 .pane .diff-text { position: absolute; top: 17px; left: 18px; right: calc(18px + var(--scrollbar-width, 0px)); margin: 0; pointer-events: none; }
 .pane.has-diff textarea { color: transparent; caret-color: #182234; }
 .pane.has-diff textarea::selection { background: rgb(39 105 215 / 25%); color: transparent; }
-.diff-output mark { padding: 1px 0; color: inherit; border-radius: 2px; }
-.diff-output.removed mark { background: #ffe2b8; color: #693900; text-decoration: line-through; text-decoration-thickness: 1.5px; text-decoration-color: #693900; }
-.diff-output.added mark { background: #d2e8ff; color: #123f85; text-decoration: underline double; text-underline-offset: 3px; text-decoration-thickness: 1px; }
+/* The editor stays in Segoe UI regular weight; the diff layer uses
+   a visual faux-bold stroke so highlighted letters occupy the same width.
+   Applying font-weight:700 directly would shift caret and wrap positions. */
+.diff-output mark {
+  padding: 1px 0;
+  border-radius: 2px;
+  color: #142236;
+  font-weight: inherit;
+  -webkit-text-stroke: .38px currentColor;
+  text-shadow: .23px 0 currentColor, -.23px 0 currentColor;
+  text-decoration: none;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+/* Warm amber on the original, cool blue on the revision.
+   Text remains dark and distinctly heavier; no underline or strikethrough. */
+.diff-output.removed mark { background-color: #ffe1ae; }
+.diff-output.added mark { background-color: #c7e7ff; }
 .actions { margin-top: 18px; display: flex; align-items: center; justify-content: center; }
 button { min-width: 144px; border: 1px solid #1659a1; background: #1869b8; color: #fff; font-family: inherit; font-size: 15px; font-weight: 600; border-radius: 7px; padding: 11px 22px; cursor: pointer; }
 button:hover { background: #115a9f; }
@@ -24,16 +39,17 @@ button:focus-visible { outline: 3px solid #80acf6; outline-offset: 3px; }
 @media (max-width: 700px) { .workspace { padding: 12px; } .panes { grid-template-columns: minmax(0,1fr); gap: 12px; } .pane { height: 38vh; min-height: 180px; } .actions { margin-top: 12px; } }
 
 
-/* Highlight whitespace independently of surrounding changed words.
-   The visible dot is decorative; the real space remains intact for editing,
-   copy/paste, text alignment and exact character-offset matching. */
+/* Mark changed whitespace without inserting visible text into the original.
+   The dot is positioned over a real space, retaining character offsets.
+   Do not draw underline/bottom-border indicators. */
 .diff-output mark.changed-space,
 .diff-output mark.changed-tab,
 .diff-output mark.changed-newline {
   position: relative;
-  border-radius: 0;
-  box-shadow: inset 0 -2px 0 currentColor;
+  border-radius: 1px;
   text-decoration: none;
+  box-shadow: none;
+  background-image: none;
 }
 .diff-output mark.changed-space::after {
   content: "·";
@@ -42,10 +58,12 @@ button:focus-visible { outline: 3px solid #80acf6; outline-offset: 3px; }
   top: 0;
   width: 100%;
   text-align: center;
-  color: currentColor;
+  color: #21364b;
   font-weight: 800;
   line-height: inherit;
   pointer-events: none;
+  -webkit-text-stroke: 0;
+  text-shadow: none;
 }
 .diff-output mark.changed-tab::after {
   content: "→";
@@ -53,8 +71,10 @@ button:focus-visible { outline: 3px solid #80acf6; outline-offset: 3px; }
   left: 0;
   top: 0;
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 800;
+  color: #21364b;
   pointer-events: none;
+  -webkit-text-stroke: 0;
+  text-shadow: none;
 }
-/* Newline remains a real line break; its original character is not replaced. */
-.diff-output mark.changed-newline { background-image: linear-gradient(currentColor, currentColor); background-repeat: no-repeat; background-position: left bottom; background-size: 6px 2px; }
+/* A changed newline is highlighted by its background color alone. */

@@ -139,7 +139,7 @@
     const values = textareas.map(element => element.value);
     status.textContent = "Comparing texts.";
     try {
-      const newWorker = new Worker("diff-worker.js?v=char-precision-2");
+      const newWorker = new Worker("diff-worker.js?v=paired-visual-3");
       worker = newWorker;
       newWorker.onmessage = event => {
         if (job !== currentJob) return;
