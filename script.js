@@ -103,6 +103,14 @@
         if (rangeAt < ranges.length &&
             ranges[rangeAt][0] <= next && ranges[rangeAt][1] > next) {
           line.classList.add("break-changed");
+          if (lineStart < lineEnd) {
+            // The indicator is visual only; it contributes no character and
+            // does not affect the editor's line breaks or column positions.
+            const indicator = document.createElement("span");
+            indicator.className = "break-indicator";
+            indicator.setAttribute("aria-hidden", "true");
+            line.appendChild(indicator);
+          }
         }
       }
       fragment.appendChild(line);
@@ -138,7 +146,7 @@
     const values = textareas.map(element => element.value);
     status.textContent = "Comparing texts.";
     try {
-      const newWorker = new Worker("diff-worker.js?v=line-renderer-20261022-1");
+      const newWorker = new Worker("diff-worker.js?v=newline-anchor-20261022-2");
       worker = newWorker;
       newWorker.onmessage = event => {
         if (job !== currentJob) return;

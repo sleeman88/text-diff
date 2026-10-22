@@ -31,15 +31,39 @@ body { min-height: 100vh; }
 .diff-output.removed mark { background: #ffe1ae; }
 .diff-output.added mark { background: #c7e7ff; }
 
-/* NEWLINE DIFFERENCES ARE LINE-LEVEL ANNOTATIONS, NOT FAKE GLYPHS.
-   A tinted line and a 5px edge identify an extra/missing line break.
-   An empty source line itself paints as a full-width horizontal band. */
-.diff-output.removed .diff-line.break-changed { background: #fff0d5; box-shadow: inset 5px 0 #cf850c; }
-.diff-output.added .diff-line.break-changed { background: #e4f3ff; box-shadow: inset 5px 0 #237db7; }
-.diff-output.removed .diff-line.break-changed.empty { background: #ffe2ae; box-shadow: inset 5px 0 #c47a04; }
-.diff-output.added .diff-line.break-changed.empty { background: #c7e7ff; box-shadow: inset 5px 0 #237db7; }
-/* No text content is injected for spaces or line endings. */
-.diff-line::before,.diff-line::after,.diff-line mark::before,.diff-line mark::after { content: none !important; }
+/* Only completely empty source lines receive a horizontal band.
+   A nonempty line uses a tiny marker at the original line ending, never a
+   full-width background that could obscure its ordinary text highlighting. */
+.diff-output.removed .diff-line.break-changed.empty {
+  background: #ffe7c0;
+  box-shadow: inset 4px 0 #d99732;
+}
+.diff-output.added .diff-line.break-changed.empty {
+  background: #d9efff;
+  box-shadow: inset 4px 0 #4a9bd7;
+}
+/* A zero-width inline anchor draws a small rectangle at the exact end of a
+   nonempty line without adding a glyph or changing line wrapping. */
+.diff-line .break-indicator {
+  display: inline;
+  position: relative;
+  font: inherit;
+  white-space: nowrap;
+}
+.diff-line .break-indicator::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: -.1em;
+  width: 5px;
+  height: 1.1em;
+  border-radius: 1px;
+  pointer-events: none;
+}
+.diff-output.removed .break-indicator::after { background: #edae4f; }
+.diff-output.added .break-indicator::after { background: #64ade5; }
+/* Never inject bullets/dots/arrows into whitespace or ordinary differences. */
+.diff-line mark::before, .diff-line mark::after { content: none !important; }
 .actions { margin-top: 18px; display: flex; align-items: center; justify-content: center; }
 button { min-width: 144px; border: 1px solid #1659a1; background: #1869b8; color: #fff; font-family: inherit; font-size: 15px; font-weight: 600; border-radius: 7px; padding: 11px 22px; cursor: pointer; }
 button:hover { background: #115a9f; }
