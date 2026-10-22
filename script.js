@@ -12,14 +12,10 @@
   let stopTimer = null;
   let highlighted = false;
   let syncing = false;
-  // These ranges refer to the current text (not just the last compared text).
-  // Editing transforms the ranges so untouched text keeps its annotations.
   const overlayTexts = ["", ""];
   const overlayRanges = [[], []];
   const pendingFrames = [null, null];
 
-  // The textareas remain editable at all times. Highlights are drawn in a
-  // separate, non-interactive layer behind them and never replace the editors.
   function cancelJob() {
     ++currentJob;
     clearTimeout(stopTimer);
@@ -27,31 +23,32 @@
     if (worker) { worker.terminate(); worker = null; }
   }
 
-  // Update offsets after one contiguous edit. Ranges outside the edited
-  // span are preserved even when text is inserted/deleted before them.
-  // The affected characters lose their old annotation until the next Compare.
   function transformRanges(ranges, before, after) {
     let prefix = 0;
     const limit = Math.min(before.length, after.length);
     while (prefix < limit && before.charCodeAt(prefix) === after.charCodeAt(prefix)) prefix++;
-
     let oldEnd = before.length, newEnd = after.length;
     while (oldEnd > prefix && newEnd > prefix &&
            before.charCodeAt(oldEnd - 1) === after.charCodeAt(newEnd - 1)) {
-      oldEnd--;
-      newEnd--;
+      oldEnd--; newEnd--;
     }
     const shift = newEnd - oldEnd;
     const transformed = [];
     for (const [start, end] of ranges) {
-      // The unchanged prefix retains its original position.
       const beforeEditEnd = Math.min(end, prefix);
       if (start < beforeEditEnd) transformed.push([start, beforeEditEnd]);
-      // The unchanged suffix keeps its marks at their new positions.
       const afterEditStart = Math.max(start, oldEnd);
       if (afterEditStart < end) transformed.push([afterEditStart + shift, end + shift]);
     }
     return transformed;
+  }
+
+  function positionOverlay(index) {
+    const textarea = textareas[index];
+    const scrollbarWidth = textarea.offsetWidth - textarea.clientWidth;
+    outputs[index].style.setProperty("--scrollbar-width", `${scrollbarWidth}px`);
+    contents[index].style.transform = `translateY(${-textarea.scrollTop}px)`;
+    contents[index].style.translate = `${-textarea.scrollLeft}px 0`;
   }
 
   function scheduleOverlayRender(index) {
@@ -64,95 +61,56 @@
     });
   }
 
-  function positionOverlay(index) {
-    const textarea = textareas[index];
-    // Account for the textarea's scrollbar so wrapping stays aligned.
-    const scrollbarWidth = textarea.offsetWidth - textarea.clientWidth;
-    outputs[index].style.setProperty("--scrollbar-width", `${scrollbarWidth}px`);
-    contents[index].style.transform = `translateY(${-textarea.scrollTop}px)`;
-  }
-
-  function renderText(element, value, ranges) {
-    // Changed characters are exact UTF-16 offsets from diff-worker.js.
-    // Render whitespace separately even when it is adjacent to a removed word.
-    // For example, removing "could " must mark BOTH "could" and the extra space.
+  // Rebuild the text as explicit line elements. A changed newline becomes a
+  // line-level annotation. It does not depend on getBoundingClientRect() of a
+  // zero-width newline, and empty rows have their own visible background.
+  function renderText(element, text, ranges) {
     const fragment = document.createDocumentFragment();
-    let previous = 0;
+    let lineStart = 0;
+    let searchFrom = 0;
+    let rangeAt = 0;
 
-    function appendChanged(start, end) {
-      let run = start;
-      for (let at = start; at < end; at++) {
-        const c = value[at];
-        if (c !== " " && c !== "\t" && c !== "\n") continue;
-        if (at > run) {
+    for (;;) {
+      const next = text.indexOf("\n", searchFrom);
+      const lineEnd = next === -1 ? text.length : next;
+      const line = document.createElement("div");
+      line.className = "diff-line";
+      if (lineStart === lineEnd) line.classList.add("empty");
+
+      // Move the range cursor to the first range intersecting this line.
+      while (rangeAt < ranges.length && ranges[rangeAt][1] <= lineStart) rangeAt++;
+      let at = lineStart;
+      let i = rangeAt;
+      while (i < ranges.length && ranges[i][0] < lineEnd) {
+        const [rawStart, rawEnd] = ranges[i];
+        const start = Math.max(lineStart, rawStart);
+        const end = Math.min(lineEnd, rawEnd);
+        if (start > at) line.appendChild(document.createTextNode(text.slice(at, start)));
+        if (end > start) {
           const mark = document.createElement("mark");
-          mark.textContent = value.slice(run, at);
-          fragment.appendChild(mark);
+          mark.textContent = text.slice(start, end);
+          line.appendChild(mark);
+          at = end;
         }
-        const spaceMark = document.createElement("mark");
-        spaceMark.textContent = c;
-        if (c === "\n") {
-          spaceMark.classList.add("changed-newline");
-          if (at === 0 || value[at - 1] === "\n") {
-            spaceMark.classList.add("changed-empty-line");
-          }
-        }
-        // Keep real whitespace characters without a marker-specific class.
-        // Old cached CSS used .changed-space::after to draw visible dots;
-        // a plain mark cannot trigger those pseudo-elements.
-        fragment.appendChild(spaceMark);
-        run = at + 1;
+        i++;
       }
-      if (run < end) {
-        const mark = document.createElement("mark");
-        mark.textContent = value.slice(run, end);
-        fragment.appendChild(mark);
-      }
-    }
+      if (at < lineEnd) line.appendChild(document.createTextNode(text.slice(at, lineEnd)));
 
-    for (const [start, end] of ranges) {
-      if (start < previous || end > value.length || start >= end) continue;
-      if (start > previous) fragment.appendChild(document.createTextNode(value.slice(previous, start)));
-      appendChanged(start, end);
-      previous = end;
+      if (next !== -1) {
+        // A difference of the newline *character* annotates its source line.
+        // For a blank line this shades the whole blank row.
+        while (rangeAt < ranges.length && ranges[rangeAt][1] <= next) rangeAt++;
+        if (rangeAt < ranges.length &&
+            ranges[rangeAt][0] <= next && ranges[rangeAt][1] > next) {
+          line.classList.add("break-changed");
+        }
+      }
+      fragment.appendChild(line);
+      if (next === -1) break;
+      searchFrom = next + 1;
+      lineStart = searchFrom;
     }
-    if (previous < value.length) fragment.appendChild(document.createTextNode(value.slice(previous)));
     element.replaceChildren(fragment);
-    drawNewlineVisuals(element);
-  }
-
-  // Newline characters have zero width in the editor. A normal <mark> around
-  // "\\n" therefore paints nothing (or paints at the wrong place). Position
-  // independent, non-interactive background elements from the measured text
-  // geometry. This keeps the source text, text wrapping and caret unchanged.
-  function drawNewlineVisuals(element) {
-    const breaks = element.querySelectorAll("mark.changed-newline");
-    if (!breaks.length) return;
-    const parentBox = element.getBoundingClientRect();
-    const lineHeight = parseFloat(getComputedStyle(element).lineHeight) || 25;
-    const visualPositions = [];
-    for (const mark of breaks) {
-      const rect = mark.getBoundingClientRect();
-      const blank = mark.classList.contains("changed-empty-line");
-      const y = rect.top - parentBox.top - (lineHeight - rect.height) / 2;
-      visualPositions.push({
-        blank,
-        top: y,
-        left: Math.min(Math.max(0, rect.left - parentBox.left), Math.max(0, parentBox.width - 12)),
-        height: blank ? lineHeight : Math.max(19, rect.height)
-      });
-    }
-    const visuals = document.createDocumentFragment();
-    for (const info of visualPositions) {
-      const visual = document.createElement("span");
-      visual.className = info.blank ? "newline-band" : "newline-flag";
-      visual.setAttribute("aria-hidden", "true");
-      visual.style.top = `${info.top}px`;
-      if (!info.blank) visual.style.left = `${info.left}px`;
-      visual.style.height = `${info.height}px`;
-      visuals.appendChild(visual);
-    }
-    element.appendChild(visuals);
   }
 
   function showResults(data, values) {
@@ -175,27 +133,22 @@
   }
 
   function runComparison() {
-    // Clicking Compare again simply replaces the previous comparison.
-    // An in-flight comparison is canceled, not queued.
     cancelJob();
     const job = currentJob;
     const values = textareas.map(element => element.value);
     status.textContent = "Comparing texts.";
     try {
-      const newWorker = new Worker("diff-worker.js?v=newline-visible-20261022-v3");
+      const newWorker = new Worker("diff-worker.js?v=line-renderer-20261022-1");
       worker = newWorker;
       newWorker.onmessage = event => {
         if (job !== currentJob) return;
-        clearTimeout(stopTimer);
-        stopTimer = null;
-        newWorker.terminate();
-        worker = null;
+        clearTimeout(stopTimer); stopTimer = null;
+        newWorker.terminate(); worker = null;
         if (event.data.error) {
           status.textContent = event.data.error;
           window.alert(event.data.error);
           return;
         }
-        // The editors stay in place, preserving focus, selection and scroll.
         requestAnimationFrame(() => {
           if (job === currentJob) showResults(event.data, values);
         });
@@ -221,10 +174,8 @@
   }
 
   compare.addEventListener("click", runComparison);
-
   for (let i = 0; i < 2; i++) {
     textareas[i].addEventListener("input", () => {
-      // Cancel a pending comparison, but never clear unrelated highlights.
       cancelJob();
       if (highlighted) {
         const nextText = textareas[i].value;
@@ -234,7 +185,6 @@
           scheduleOverlayRender(i);
         }
       }
-      // Changes have not been re-compared: Compare refreshes both sides.
       status.textContent = "Text edited. Press Compare to refresh the differences.";
     });
     textareas[i].addEventListener("scroll", () => {
@@ -252,7 +202,6 @@
       requestAnimationFrame(() => { syncing = false; });
     }, {passive: true});
   }
-
   window.addEventListener("resize", () => {
     if (highlighted) for (let i = 0; i < 2; i++) positionOverlay(i);
   });

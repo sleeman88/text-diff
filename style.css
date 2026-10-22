@@ -6,64 +6,43 @@ body { min-height: 100vh; }
 .panes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
 .pane { position: relative; height: min(79vh, 1100px); min-height: 330px; min-width: 0; border: 1px solid #cdd3dd; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 2px #1720330b; }
 .pane:focus-within { border-color: #9caeca; box-shadow: 0 0 0 2px #3774bb18; }
-.pane textarea, .pane .diff-text { color: #182234; font-family: "Segoe UI", Arial, sans-serif; font-size: 15px; line-height: 1.65; letter-spacing: .003em; tab-size: 4; white-space: pre-wrap; overflow-wrap: anywhere; word-break: normal; }
+.pane textarea, .pane .diff-text {
+  color: #182234; font-family: "Segoe UI", Arial, sans-serif;
+  font-size: 15px; line-height: 1.65; letter-spacing: .003em;
+  tab-size: 4; white-space: pre-wrap; overflow-wrap: anywhere;
+  word-break: normal; font-weight: 400; font-variant-ligatures: none;
+}
 .pane textarea { display: block; position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; margin: 0; border: 0; padding: 17px 18px; resize: none; outline: none; background: transparent; }
 .pane .diff-output { position: absolute; inset: 0; z-index: 0; overflow: hidden; pointer-events: none; }
 .pane .diff-output[hidden] { display: none; }
 .pane .diff-text { position: absolute; top: 17px; left: 18px; right: calc(18px + var(--scrollbar-width, 0px)); margin: 0; pointer-events: none; }
 .pane.has-diff textarea { color: transparent; caret-color: #182234; }
 .pane.has-diff textarea::selection { background: rgb(39 105 215 / 25%); color: transparent; }
-/* The editor stays in Segoe UI regular weight; the diff layer uses
-   a visual faux-bold stroke so highlighted letters occupy the same width.
-   Applying font-weight:700 directly would shift caret and wrap positions. */
-.diff-output mark {
-  padding: 1px 0;
-  border-radius: 2px;
-  color: #142236;
-  font-weight: inherit;
+
+/* Each explicit source line is its own block. Unlike a zero-width newline
+   <mark>, the block has a measurable line box even when the line is empty. */
+.diff-line { position: relative; display: block; min-height: 1.65em; white-space: pre-wrap; overflow-wrap: anywhere; word-break: normal; }
+.diff-line mark { padding: 0; border-radius: 2px; color: #142236; font-weight: inherit;
   -webkit-text-stroke: .38px currentColor;
   text-shadow: .23px 0 currentColor, -.23px 0 currentColor;
-  text-decoration: none;
-  box-decoration-break: clone;
+  text-decoration: none; box-decoration-break: clone;
   -webkit-box-decoration-break: clone;
 }
-/* Warm amber on the original, cool blue on the revision.
-   Text remains dark and distinctly heavier; no underline or strikethrough. */
-.diff-output.removed mark { background-color: #ffe1ae; }
-.diff-output.added mark { background-color: #c7e7ff; }
+.diff-output.removed mark { background: #ffe1ae; }
+.diff-output.added mark { background: #c7e7ff; }
+
+/* NEWLINE DIFFERENCES ARE LINE-LEVEL ANNOTATIONS, NOT FAKE GLYPHS.
+   A tinted line and a 5px edge identify an extra/missing line break.
+   An empty source line itself paints as a full-width horizontal band. */
+.diff-output.removed .diff-line.break-changed { background: #fff0d5; box-shadow: inset 5px 0 #cf850c; }
+.diff-output.added .diff-line.break-changed { background: #e4f3ff; box-shadow: inset 5px 0 #237db7; }
+.diff-output.removed .diff-line.break-changed.empty { background: #ffe2ae; box-shadow: inset 5px 0 #c47a04; }
+.diff-output.added .diff-line.break-changed.empty { background: #c7e7ff; box-shadow: inset 5px 0 #237db7; }
+/* No text content is injected for spaces or line endings. */
+.diff-line::before,.diff-line::after,.diff-line mark::before,.diff-line mark::after { content: none !important; }
 .actions { margin-top: 18px; display: flex; align-items: center; justify-content: center; }
 button { min-width: 144px; border: 1px solid #1659a1; background: #1869b8; color: #fff; font-family: inherit; font-size: 15px; font-weight: 600; border-radius: 7px; padding: 11px 22px; cursor: pointer; }
 button:hover { background: #115a9f; }
 button:focus-visible { outline: 3px solid #80acf6; outline-offset: 3px; }
 .visually-hidden { position: absolute !important; height: 1px; width: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 @media (max-width: 700px) { .workspace { padding: 12px; } .panes { grid-template-columns: minmax(0,1fr); gap: 12px; } .pane { height: 38vh; min-height: 180px; } .actions { margin-top: 12px; } }
-
-
-/* Changed newlines have no glyph width. Their visual bands/flags are
-   absolutely positioned from real layout coordinates, with no text added. */
-.diff-output mark.changed-newline { background: transparent; }
-.diff-output .newline-flag,
-.diff-output .newline-band {
-  position: absolute;
-  display: block;
-  pointer-events: none;
-  box-sizing: border-box;
-  border-radius: 2px;
-}
-.diff-output .newline-flag {
-  width: 12px;
-  z-index: 2;
-  outline: 1px solid transparent;
-}
-.diff-output.removed .newline-flag { background: #ffce79; outline-color: #b76c08; }
-.diff-output.added .newline-flag { background: #8bcafa; outline-color: #2673ad; }
-.diff-output .newline-band {
-  left: 0;
-  right: 0;
-  z-index: 0;
-}
-.diff-output.removed .newline-band { background: #ffe0a8; border-left: 5px solid #c77d19; }
-.diff-output.added .newline-band { background: #c9e7fe; border-left: 5px solid #3382bd; }
-/* Do not draw middle dots, arrows, invisible-glyph placeholders or text decorations. */
-.diff-output mark::before,
-.diff-output mark::after { content: none !important; }
