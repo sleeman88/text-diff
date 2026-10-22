@@ -173,73 +173,114 @@ function compareGap(left, right, startA, endA, startB, endB, deadline, leftRange
   return false;
 }
 
-// A line break is a difference only when it occurs between the SAME
-// consecutive matching lexical tokens in both documents. Deleted headings,
-// moved sentences and wholly inserted lines must not cause their routine
-// line endings to be highlighted as extra independent edits.
+// Report structural newline differences separately from ordinary character edits.
+// Word alignment is useful for moved/deleted passages, but cannot itself match
+// a word split by a newly inserted newline (studying vs stu\ndying).
 function detectNewlineChanges(left, right, A, B, alignedMatches) {
   const leftBreaks = [], rightBreaks = [];
   const lexical = token => /[\p{L}\p{N}]/u.test(token.value);
+  const isWhitespace = c => /\s/u.test(c);
 
-  function countBreaks(text, start, end) {
-    let count = 0;
-    for (let i = start; i < end; i++) if (text[i] === "\n") count++;
-    return count;
+  function positions(text, start, end) {
+    const breaks = [];
+    for (let i = start; i < end; i++) if (text[i] === "\n") breaks.push(i);
+    return breaks;
   }
-  function addSurplus(text, start, end, count, output) {
-    if (count <= 0) return;
-    const positions = [];
-    for (let i = start; i < end; i++) if (text[i] === "\n") positions.push(i);
-    // The first newline is the original line ending; later newlines are
-    // surplus empty lines. For a one-versus-zero break, mark the only break.
-    for (const pos of positions.slice(-count)) output.push(pos);
-  }
-  function reconcile(aFrom, aTo, bFrom, bTo) {
-    const ac = countBreaks(left, aFrom, aTo);
-    const bc = countBreaks(right, bFrom, bTo);
-    if (ac > bc) addSurplus(left, aFrom, aTo, ac - bc, leftBreaks);
-    if (bc > ac) addSurplus(right, bFrom, bTo, bc - ac, rightBreaks);
+  function reconcileCounts(aFrom, aTo, bFrom, bTo) {
+    const a = positions(left, aFrom, aTo);
+    const b = positions(right, bFrom, bTo);
+    // Keep the shared original line break; excess breaks belong to blank lines.
+    if (a.length > b.length) leftBreaks.push(...a.slice(b.length));
+    if (b.length > a.length) rightBreaks.push(...b.slice(a.length));
   }
   function noLexicalTokens(tokens, start, end) {
-    for (let k = start; k < end; k++) {
-      if (lexical(tokens[k])) return false;
+    for (let k = start; k < end; k++) if (lexical(tokens[k])) return false;
+    return true;
+  }
+
+  // A newline can be inserted inside a word. Compare the *non-whitespace*
+  // characters in the bounded gap between corresponding words. If they are
+  // identical, any different newline positions are unambiguous structural edits.
+  // Key each newline by the number of non-whitespace characters preceding it.
+  function signatureAndBreaks(text, from, to) {
+    let key = "", charOffset = 0;
+    const breaks = new Map();
+    for (let i = from; i < to; i++) {
+      const c = text[i];
+      if (c === "\n") {
+        if (!breaks.has(charOffset)) breaks.set(charOffset, []);
+        breaks.get(charOffset).push(i);
+      } else if (!isWhitespace(c)) {
+        key += c;
+        charOffset++;
+      }
+    }
+    return {key, breaks};
+  }
+  function compareEquivalentGap(aFrom, aTo, bFrom, bTo) {
+    if (aTo - aFrom + bTo - bFrom > 8000) return false;
+    const a = signatureAndBreaks(left, aFrom, aTo);
+    const b = signatureAndBreaks(right, bFrom, bTo);
+    if (a.key !== b.key) return false;
+    const allOffsets = new Set([...a.breaks.keys(), ...b.breaks.keys()]);
+    for (const k of allOffsets) {
+      const ab = a.breaks.get(k) || [];
+      const bb = b.breaks.get(k) || [];
+      if (ab.length > bb.length) leftBreaks.push(...ab.slice(bb.length));
+      if (bb.length > ab.length) rightBreaks.push(...bb.slice(ab.length));
     }
     return true;
   }
 
   const anchors = alignedMatches.filter(([ai, bi]) => lexical(A[ai]) && lexical(B[bi]));
-  if (!anchors.length) return {leftBreaks, rightBreaks};
 
-  // An unmatched leading heading is NOT a blank-line addition. Compare
-  // leading whitespace only if both documents start with the same first word.
-  const [firstA, firstB] = anchors[0];
-  if (noLexicalTokens(A, 0, firstA) && noLexicalTokens(B, 0, firstB) &&
-      /^\s*$/u.test(left.slice(0, A[firstA].from)) &&
-      /^\s*$/u.test(right.slice(0, B[firstB].from))) {
-    reconcile(0, A[firstA].from, 0, B[firstB].from);
-  }
+  // Document-leading blank lines are independent differences, even when
+  // the other document starts with headings that were deleted. Only consider
+  // the leading whitespace, not ordinary line endings following a heading.
+  const firstNonWhitespace = text => {
+    let i = 0;
+    while (i < text.length && isWhitespace(text[i])) i++;
+    return i;
+  };
+  const leadingA = firstNonWhitespace(left);
+  const leadingB = firstNonWhitespace(right);
+  reconcileCounts(0, leadingA, 0, leadingB);
+
+  if (!anchors.length) return {
+    leftBreaks: [...new Set(leftBreaks)].sort((x,y) => x-y),
+    rightBreaks: [...new Set(rightBreaks)].sort((x,y) => x-y)
+  };
 
   for (let i = 1; i < anchors.length; i++) {
-    const [aPrevious, bPrevious] = anchors[i - 1];
-    const [aCurrent, bCurrent] = anchors[i];
-    if (aCurrent <= aPrevious || bCurrent <= bPrevious) continue;
-    // These lexical tokens must be immediate textual neighbors in BOTH
-    // documents; punctuation/bullets between them are permitted. Any
-    // inserted or deleted word makes the gap structurally ambiguous.
-    if (!noLexicalTokens(A, aPrevious + 1, aCurrent) ||
-        !noLexicalTokens(B, bPrevious + 1, bCurrent)) continue;
-    reconcile(A[aPrevious].to, A[aCurrent].from,
-              B[bPrevious].to, B[bCurrent].from);
+    const [aPrev, bPrev] = anchors[i - 1];
+    const [aNow, bNow] = anchors[i];
+    if (aNow <= aPrev || bNow <= bPrev) continue;
+    const aFrom = A[aPrev].to, aTo = A[aNow].from;
+    const bFrom = B[bPrev].to, bTo = B[bNow].from;
+    if (aTo < aFrom || bTo < bFrom) continue;
+    if (aTo === aFrom && bTo === bFrom) continue;
+    // Identical text with modified whitespace (even within a lexical word).
+    if (compareEquivalentGap(aFrom, aTo, bFrom, bTo)) continue;
+    // Preserve the existing conservative fallback for gaps with no inserted
+    // words: this also correctly catches extra blank lines near changed bullets.
+    if (noLexicalTokens(A, aPrev + 1, aNow) &&
+        noLexicalTokens(B, bPrev + 1, bNow)) {
+      reconcileCounts(aFrom, aTo, bFrom, bTo);
+    }
   }
 
-  // Compare trailing line breaks only when the last shared lexical token
-  // is the last lexical token in BOTH documents (no deleted ending paragraph).
   const [lastA, lastB] = anchors[anchors.length - 1];
   if (noLexicalTokens(A, lastA + 1, A.length) &&
       noLexicalTokens(B, lastB + 1, B.length)) {
-    reconcile(A[lastA].to, left.length, B[lastB].to, right.length);
+    // Compare explicit trailing newline characters only for documents that
+    // end on a shared lexical token, avoiding spurious trailing marks.
+    compareEquivalentGap(A[lastA].to, left.length, B[lastB].to, right.length) ||
+      reconcileCounts(A[lastA].to, left.length, B[lastB].to, right.length);
   }
-  return {leftBreaks, rightBreaks};
+  return {
+    leftBreaks: [...new Set(leftBreaks)].sort((x,y) => x-y),
+    rightBreaks: [...new Set(rightBreaks)].sort((x,y) => x-y)
+  };
 }
 
 function compute(left, right) {
