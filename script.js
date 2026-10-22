@@ -18,7 +18,9 @@
     for (let i = 0; i < 2; i++) {
       textareas[i].hidden = false;
       outputs[i].hidden = true;
-      outputs[i].replaceChildren();
+      // Keep the previous rendered diff detached from view instead of clearing
+      // potentially thousands of DOM nodes on the Edit click. The next
+      // comparison replaces this content, so it never accumulates across runs.
     }
     compare.textContent = "Compare";
     compare.disabled = false;
