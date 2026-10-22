@@ -118,6 +118,41 @@
     }
     if (previous < value.length) fragment.appendChild(document.createTextNode(value.slice(previous)));
     element.replaceChildren(fragment);
+    drawNewlineVisuals(element);
+  }
+
+  // Newline characters have zero width in the editor. A normal <mark> around
+  // "\\n" therefore paints nothing (or paints at the wrong place). Position
+  // independent, non-interactive background elements from the measured text
+  // geometry. This keeps the source text, text wrapping and caret unchanged.
+  function drawNewlineVisuals(element) {
+    const breaks = element.querySelectorAll("mark.changed-newline");
+    if (!breaks.length) return;
+    const parentBox = element.getBoundingClientRect();
+    const lineHeight = parseFloat(getComputedStyle(element).lineHeight) || 25;
+    const visualPositions = [];
+    for (const mark of breaks) {
+      const rect = mark.getBoundingClientRect();
+      const blank = mark.classList.contains("changed-empty-line");
+      const y = rect.top - parentBox.top - (lineHeight - rect.height) / 2;
+      visualPositions.push({
+        blank,
+        top: y,
+        left: Math.min(Math.max(0, rect.left - parentBox.left), Math.max(0, parentBox.width - 12)),
+        height: blank ? lineHeight : Math.max(19, rect.height)
+      });
+    }
+    const visuals = document.createDocumentFragment();
+    for (const info of visualPositions) {
+      const visual = document.createElement("span");
+      visual.className = info.blank ? "newline-band" : "newline-flag";
+      visual.setAttribute("aria-hidden", "true");
+      visual.style.top = `${info.top}px`;
+      if (!info.blank) visual.style.left = `${info.left}px`;
+      visual.style.height = `${info.height}px`;
+      visuals.appendChild(visual);
+    }
+    element.appendChild(visuals);
   }
 
   function showResults(data, values) {
@@ -147,7 +182,7 @@
     const values = textareas.map(element => element.value);
     status.textContent = "Comparing texts.";
     try {
-      const newWorker = new Worker("diff-worker.js?v=newline-diff-20261022-v2");
+      const newWorker = new Worker("diff-worker.js?v=newline-visible-20261022-v3");
       worker = newWorker;
       newWorker.onmessage = event => {
         if (job !== currentJob) return;

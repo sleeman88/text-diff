@@ -39,42 +39,31 @@ button:focus-visible { outline: 3px solid #80acf6; outline-offset: 3px; }
 @media (max-width: 700px) { .workspace { padding: 12px; } .panes { grid-template-columns: minmax(0,1fr); gap: 12px; } .pane { height: 38vh; min-height: 180px; } .actions { margin-top: 12px; } }
 
 
-/* Never add text glyphs for whitespace; the source text stays unchanged. */
-.diff-output mark.changed-space::before,
-.diff-output mark.changed-space::after,
-.diff-output mark.changed-tab::before,
-.diff-output mark.changed-tab::after,
-.diff-output mark.changed-newline::after {
-  content: none !important;
-  display: none !important;
-}
-
-/* A newline character occupies no visible horizontal space. Draw a highlight
-   at its exact location without inserting a symbol or altering text wrapping. */
-.diff-output mark.changed-newline { position: relative; }
-.diff-output mark.changed-newline::before {
-  content: "";
+/* Changed newlines have no glyph width. Their visual bands/flags are
+   absolutely positioned from real layout coordinates, with no text added. */
+.diff-output mark.changed-newline { background: transparent; }
+.diff-output .newline-flag,
+.diff-output .newline-band {
   position: absolute;
   display: block;
-  width: 10px;
-  height: 1em;
-  left: 0;
-  top: .18em;
-  border-radius: 2px;
   pointer-events: none;
+  box-sizing: border-box;
+  border-radius: 2px;
 }
-.diff-output.removed mark.changed-newline::before { background-color: #ffe1ae; }
-.diff-output.added mark.changed-newline::before { background-color: #c7e7ff; }
-
-/* When the changed newline belongs to an otherwise empty line, tint the
-   whole blank row to make the extra or missing line easy to spot. The width
-   is clipped by its own text pane. No textual placeholder is inserted. */
-.diff-output mark.changed-empty-line::before {
+.diff-output .newline-flag {
+  width: 12px;
+  z-index: 2;
+  outline: 1px solid transparent;
+}
+.diff-output.removed .newline-flag { background: #ffce79; outline-color: #b76c08; }
+.diff-output.added .newline-flag { background: #8bcafa; outline-color: #2673ad; }
+.diff-output .newline-band {
   left: 0;
-  top: -.16em;
-  width: 100vw;
-  height: 1.65em;
-  border-radius: 0;
+  right: 0;
+  z-index: 0;
 }
-.diff-output.removed mark.changed-empty-line::before { background-color: #fff0d6; }
-.diff-output.added mark.changed-empty-line::before { background-color: #e4f2ff; }
+.diff-output.removed .newline-band { background: #ffe0a8; border-left: 5px solid #c77d19; }
+.diff-output.added .newline-band { background: #c9e7fe; border-left: 5px solid #3382bd; }
+/* Do not draw middle dots, arrows, invisible-glyph placeholders or text decorations. */
+.diff-output mark::before,
+.diff-output mark::after { content: none !important; }
