@@ -91,6 +91,12 @@
         }
         const spaceMark = document.createElement("mark");
         spaceMark.textContent = c;
+        if (c === "\n") {
+          spaceMark.classList.add("changed-newline");
+          if (at === 0 || value[at - 1] === "\n") {
+            spaceMark.classList.add("changed-empty-line");
+          }
+        }
         // Keep real whitespace characters without a marker-specific class.
         // Old cached CSS used .changed-space::after to draw visible dots;
         // a plain mark cannot trigger those pseudo-elements.
@@ -141,7 +147,7 @@
     const values = textareas.map(element => element.value);
     status.textContent = "Comparing texts.";
     try {
-      const newWorker = new Worker("diff-worker.js?v=no-space-glyphs-20261022");
+      const newWorker = new Worker("diff-worker.js?v=newline-diff-20261022-v2");
       worker = newWorker;
       newWorker.onmessage = event => {
         if (job !== currentJob) return;

@@ -39,15 +39,42 @@ button:focus-visible { outline: 3px solid #80acf6; outline-offset: 3px; }
 @media (max-width: 700px) { .workspace { padding: 12px; } .panes { grid-template-columns: minmax(0,1fr); gap: 12px; } .pane { height: 38vh; min-height: 180px; } .actions { margin-top: 12px; } }
 
 
-/* Whitespace differences are real text characters. Never insert
-   glyphs for spaces, tabs, or newlines, including if old class names remain
-   in markup (e.g. during mixed-cache deployments). */
+/* Never add text glyphs for whitespace; the source text stays unchanged. */
 .diff-output mark.changed-space::before,
 .diff-output mark.changed-space::after,
 .diff-output mark.changed-tab::before,
 .diff-output mark.changed-tab::after,
-.diff-output mark.changed-newline::before,
 .diff-output mark.changed-newline::after {
   content: none !important;
   display: none !important;
 }
+
+/* A newline character occupies no visible horizontal space. Draw a highlight
+   at its exact location without inserting a symbol or altering text wrapping. */
+.diff-output mark.changed-newline { position: relative; }
+.diff-output mark.changed-newline::before {
+  content: "";
+  position: absolute;
+  display: block;
+  width: 10px;
+  height: 1em;
+  left: 0;
+  top: .18em;
+  border-radius: 2px;
+  pointer-events: none;
+}
+.diff-output.removed mark.changed-newline::before { background-color: #ffe1ae; }
+.diff-output.added mark.changed-newline::before { background-color: #c7e7ff; }
+
+/* When the changed newline belongs to an otherwise empty line, tint the
+   whole blank row to make the extra or missing line easy to spot. The width
+   is clipped by its own text pane. No textual placeholder is inserted. */
+.diff-output mark.changed-empty-line::before {
+  left: 0;
+  top: -.16em;
+  width: 100vw;
+  height: 1.65em;
+  border-radius: 0;
+}
+.diff-output.removed mark.changed-empty-line::before { background-color: #fff0d6; }
+.diff-output.added mark.changed-empty-line::before { background-color: #e4f2ff; }
