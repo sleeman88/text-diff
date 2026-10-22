@@ -73,20 +73,39 @@
   }
 
   function renderText(element, value, ranges) {
-    // Render exactly the changed characters. Do not merge changes over
-    // unchanged text: even a single unchanged space is significant.
+    // Changed characters are exact UTF-16 offsets from diff-worker.js.
+    // Render whitespace separately even when it is adjacent to a removed word.
+    // For example, removing "could " must mark BOTH "could" and the extra space.
     const fragment = document.createDocumentFragment();
     let previous = 0;
+
+    function appendChanged(start, end) {
+      let run = start;
+      for (let at = start; at < end; at++) {
+        const c = value[at];
+        if (c !== " " && c !== "\t" && c !== "\n") continue;
+        if (at > run) {
+          const mark = document.createElement("mark");
+          mark.textContent = value.slice(run, at);
+          fragment.appendChild(mark);
+        }
+        const spaceMark = document.createElement("mark");
+        spaceMark.textContent = c;
+        spaceMark.className = c === " " ? "changed-space" : c === "\t" ? "changed-tab" : "changed-newline";
+        fragment.appendChild(spaceMark);
+        run = at + 1;
+      }
+      if (run < end) {
+        const mark = document.createElement("mark");
+        mark.textContent = value.slice(run, end);
+        fragment.appendChild(mark);
+      }
+    }
+
     for (const [start, end] of ranges) {
       if (start < previous || end > value.length || start >= end) continue;
       if (start > previous) fragment.appendChild(document.createTextNode(value.slice(previous, start)));
-      const mark = document.createElement("mark");
-      const changed = value.slice(start, end);
-      mark.textContent = changed;
-      // Whitespace-only differences are otherwise almost invisible. Draw a
-      // small centered dot without replacing the actual space character.
-      if (/^[ \t]+$/u.test(changed)) mark.classList.add("whitespace-change");
-      fragment.appendChild(mark);
+      appendChanged(start, end);
       previous = end;
     }
     if (previous < value.length) fragment.appendChild(document.createTextNode(value.slice(previous)));
@@ -120,7 +139,7 @@
     const values = textareas.map(element => element.value);
     status.textContent = "Comparing texts.";
     try {
-      const newWorker = new Worker("diff-worker.js?v=precise-whitespace-1");
+      const newWorker = new Worker("diff-worker.js?v=char-precision-2");
       worker = newWorker;
       newWorker.onmessage = event => {
         if (job !== currentJob) return;
