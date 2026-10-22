@@ -14,8 +14,8 @@ body { min-height: 100vh; }
 .pane.has-diff textarea { color: transparent; caret-color: #182234; }
 .pane.has-diff textarea::selection { background: rgb(39 105 215 / 25%); color: transparent; }
 .diff-output mark { padding: 1px 0; color: inherit; border-radius: 2px; }
-.diff-output.removed mark { background: #ffd6d9; color: #88202d; text-decoration: line-through; text-decoration-thickness: 1px; }
-.diff-output.added mark { background: #c8f5da; color: #135c34; }
+.diff-output.removed mark { background: #ffe2b8; color: #693900; text-decoration: line-through; text-decoration-thickness: 1.5px; text-decoration-color: #693900; }
+.diff-output.added mark { background: #d2e8ff; color: #123f85; text-decoration: underline double; text-underline-offset: 3px; text-decoration-thickness: 1px; }
 .actions { margin-top: 18px; display: flex; align-items: center; justify-content: center; }
 button { min-width: 144px; border: 1px solid #1659a1; background: #1869b8; color: #fff; font-family: inherit; font-size: 15px; font-weight: 600; border-radius: 7px; padding: 11px 22px; cursor: pointer; }
 button:hover { background: #115a9f; }

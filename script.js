@@ -12,6 +12,11 @@
   let stopTimer = null;
   let highlighted = false;
   let syncing = false;
+  // These ranges refer to the current text (not just the last compared text).
+  // Editing transforms the ranges so untouched text keeps its annotations.
+  const overlayTexts = ["", ""];
+  const overlayRanges = [[], []];
+  const pendingFrames = [null, null];
 
   // The textareas remain editable at all times. Highlights are drawn in a
   // separate, non-interactive layer behind them and never replace the editors.
@@ -22,13 +27,41 @@
     if (worker) { worker.terminate(); worker = null; }
   }
 
-  function hideHighlights() {
-    if (!highlighted) return;
-    highlighted = false;
-    for (let i = 0; i < 2; i++) {
-      panes[i].classList.remove("has-diff");
-      outputs[i].hidden = true;
+  // Update offsets after one contiguous edit. Ranges outside the edited
+  // span are preserved even when text is inserted/deleted before them.
+  // The affected characters lose their old annotation until the next Compare.
+  function transformRanges(ranges, before, after) {
+    let prefix = 0;
+    const limit = Math.min(before.length, after.length);
+    while (prefix < limit && before.charCodeAt(prefix) === after.charCodeAt(prefix)) prefix++;
+
+    let oldEnd = before.length, newEnd = after.length;
+    while (oldEnd > prefix && newEnd > prefix &&
+           before.charCodeAt(oldEnd - 1) === after.charCodeAt(newEnd - 1)) {
+      oldEnd--;
+      newEnd--;
     }
+    const shift = newEnd - oldEnd;
+    const transformed = [];
+    for (const [start, end] of ranges) {
+      // The unchanged prefix retains its original position.
+      const beforeEditEnd = Math.min(end, prefix);
+      if (start < beforeEditEnd) transformed.push([start, beforeEditEnd]);
+      // The unchanged suffix keeps its marks at their new positions.
+      const afterEditStart = Math.max(start, oldEnd);
+      if (afterEditStart < end) transformed.push([afterEditStart + shift, end + shift]);
+    }
+    return transformed;
+  }
+
+  function scheduleOverlayRender(index) {
+    if (pendingFrames[index] !== null) return;
+    pendingFrames[index] = requestAnimationFrame(() => {
+      pendingFrames[index] = null;
+      if (!highlighted) return;
+      renderText(contents[index], overlayTexts[index], overlayRanges[index]);
+      positionOverlay(index);
+    });
   }
 
   function positionOverlay(index) {
@@ -65,8 +98,15 @@
   }
 
   function showResults(data, values) {
-    renderText(contents[0], values[0], data.leftRanges);
-    renderText(contents[1], values[1], data.rightRanges);
+    for (let i = 0; i < 2; i++) {
+      if (pendingFrames[i] !== null) {
+        cancelAnimationFrame(pendingFrames[i]);
+        pendingFrames[i] = null;
+      }
+      overlayTexts[i] = values[i];
+      overlayRanges[i] = (i === 0 ? data.leftRanges : data.rightRanges);
+      renderText(contents[i], overlayTexts[i], overlayRanges[i]);
+    }
     for (let i = 0; i < 2; i++) {
       outputs[i].hidden = false;
       panes[i].classList.add("has-diff");
@@ -126,11 +166,18 @@
 
   for (let i = 0; i < 2; i++) {
     textareas[i].addEventListener("input", () => {
-      // Show the actual editable text immediately. Old ranges no longer match
-      // after a keystroke, so wait for the next Compare before highlighting.
+      // Cancel a pending comparison, but never clear unrelated highlights.
       cancelJob();
-      hideHighlights();
-      status.textContent = "";
+      if (highlighted) {
+        const nextText = textareas[i].value;
+        if (nextText !== overlayTexts[i]) {
+          overlayRanges[i] = transformRanges(overlayRanges[i], overlayTexts[i], nextText);
+          overlayTexts[i] = nextText;
+          scheduleOverlayRender(i);
+        }
+      }
+      // Changes have not been re-compared: Compare refreshes both sides.
+      status.textContent = "Text edited. Press Compare to refresh the differences.";
     });
     textareas[i].addEventListener("scroll", () => {
       if (!highlighted) return;
