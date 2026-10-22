@@ -91,7 +91,9 @@
         }
         const spaceMark = document.createElement("mark");
         spaceMark.textContent = c;
-        spaceMark.className = c === " " ? "changed-space" : c === "\t" ? "changed-tab" : "changed-newline";
+        // Keep real whitespace characters without a marker-specific class.
+        // Old cached CSS used .changed-space::after to draw visible dots;
+        // a plain mark cannot trigger those pseudo-elements.
         fragment.appendChild(spaceMark);
         run = at + 1;
       }
@@ -139,7 +141,7 @@
     const values = textareas.map(element => element.value);
     status.textContent = "Comparing texts.";
     try {
-      const newWorker = new Worker("diff-worker.js?v=paired-visual-3");
+      const newWorker = new Worker("diff-worker.js?v=no-space-glyphs-20261022");
       worker = newWorker;
       newWorker.onmessage = event => {
         if (job !== currentJob) return;

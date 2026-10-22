@@ -39,15 +39,15 @@ button:focus-visible { outline: 3px solid #80acf6; outline-offset: 3px; }
 @media (max-width: 700px) { .workspace { padding: 12px; } .panes { grid-template-columns: minmax(0,1fr); gap: 12px; } .pane { height: 38vh; min-height: 180px; } .actions { margin-top: 12px; } }
 
 
-/* Whitespace differences preserve the original characters exactly.
-   Highlight a real space/tab/newline with background color only;
-   never draw a dot, arrow, or other artificial visible glyph. */
-.diff-output mark.changed-space,
-.diff-output mark.changed-tab,
-.diff-output mark.changed-newline {
-  position: relative;
-  border-radius: 1px;
-  text-decoration: none;
-  box-shadow: none;
-  background-image: none;
+/* Whitespace differences are real text characters. Never insert
+   glyphs for spaces, tabs, or newlines, including if old class names remain
+   in markup (e.g. during mixed-cache deployments). */
+.diff-output mark.changed-space::before,
+.diff-output mark.changed-space::after,
+.diff-output mark.changed-tab::before,
+.diff-output mark.changed-tab::after,
+.diff-output mark.changed-newline::before,
+.diff-output mark.changed-newline::after {
+  content: none !important;
+  display: none !important;
 }
