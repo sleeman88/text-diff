@@ -39,9 +39,9 @@ button:focus-visible { outline: 3px solid #80acf6; outline-offset: 3px; }
 @media (max-width: 700px) { .workspace { padding: 12px; } .panes { grid-template-columns: minmax(0,1fr); gap: 12px; } .pane { height: 38vh; min-height: 180px; } .actions { margin-top: 12px; } }
 
 
-/* Mark changed whitespace without inserting visible text into the original.
-   The dot is positioned over a real space, retaining character offsets.
-   Do not draw underline/bottom-border indicators. */
+/* Whitespace differences preserve the original characters exactly.
+   Highlight a real space/tab/newline with background color only;
+   never draw a dot, arrow, or other artificial visible glyph. */
 .diff-output mark.changed-space,
 .diff-output mark.changed-tab,
 .diff-output mark.changed-newline {
@@ -51,30 +51,3 @@ button:focus-visible { outline: 3px solid #80acf6; outline-offset: 3px; }
   box-shadow: none;
   background-image: none;
 }
-.diff-output mark.changed-space::after {
-  content: "·";
-  position: absolute;
-  left: 0;
-  top: 0;
-  width: 100%;
-  text-align: center;
-  color: #21364b;
-  font-weight: 800;
-  line-height: inherit;
-  pointer-events: none;
-  -webkit-text-stroke: 0;
-  text-shadow: none;
-}
-.diff-output mark.changed-tab::after {
-  content: "→";
-  position: absolute;
-  left: 0;
-  top: 0;
-  font-size: 12px;
-  font-weight: 800;
-  color: #21364b;
-  pointer-events: none;
-  -webkit-text-stroke: 0;
-  text-shadow: none;
-}
-/* A changed newline is highlighted by its background color alone. */
