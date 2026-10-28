@@ -5,18 +5,18 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <title>Text Diff</title>
-  <link rel="stylesheet" href="style.css?v=newline-fixed-20261022-5">
-  <script src="script.js?v=newline-fixed-20261022-5" defer></script>
+  <link rel="stylesheet" href="style.css?v=aligned-20261028-1">
+  <script src="script.js?v=aligned-20261028-1" defer></script>
 </head>
 <body>
   <main class="workspace" aria-label="Text comparison">
     <section class="panes" aria-label="Texts to compare">
       <div class="pane" id="left-pane">
-        <div class="diff-output removed" id="left-output" aria-hidden="true" hidden><div class="diff-text"></div></div>
+        <div class="aligned-editor removed" id="left-output" contenteditable="true" role="textbox" aria-label="Original text" aria-multiline="true" spellcheck="false" hidden></div>
         <textarea id="left-text" aria-label="Original text" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off"></textarea>
       </div>
       <div class="pane" id="right-pane">
-        <div class="diff-output added" id="right-output" aria-hidden="true" hidden><div class="diff-text"></div></div>
+        <div class="aligned-editor added" id="right-output" contenteditable="true" role="textbox" aria-label="Revised text" aria-multiline="true" spellcheck="false" hidden></div>
         <textarea id="right-text" aria-label="Revised text" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off"></textarea>
       </div>
     </section>

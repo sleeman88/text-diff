@@ -283,6 +283,116 @@ function detectNewlineChanges(left, right, A, B, alignedMatches) {
   };
 }
 
+
+
+// Build a monotone correspondence between physical source lines. It is
+// independent of character-level highlights: only view layout uses it.
+// Unmatched lines get visual-only placeholders on the opposite side.
+function alignLines(left, right) {
+  const la = left.split("\n"), lb = right.split("\n");
+  const normalize = s => s.trim().replace(/\s+/g, " ");
+  const na = la.map(normalize), nb = lb.map(normalize);
+  const uniquePositions = values => {
+    const map = new Map();
+    for (let i = 0; i < values.length; i++) {
+      const key = values[i];
+      if (key.length < 7) continue;
+      if (!map.has(key)) map.set(key, i);
+      else map.set(key, -1);
+    }
+    return map;
+  };
+  const ua = uniquePositions(na), ub = uniquePositions(nb);
+  const candidates = [];
+  for (const [key, i] of ua) {
+    const j = ub.get(key);
+    if (i >= 0 && j !== undefined && j >= 0) candidates.push([i, j]);
+  }
+  candidates.sort((a,b) => a[0]-b[0]);
+  const tails = [], indices = [], prev = new Int32Array(candidates.length).fill(-1);
+  for (let k = 0; k < candidates.length; k++) {
+    const j = candidates[k][1];
+    let lo = 0, hi = tails.length;
+    while (lo < hi) { const m = (lo+hi)>>1; if (tails[m] < j) lo=m+1; else hi=m; }
+    if (lo) prev[k] = indices[lo-1];
+    tails[lo] = j; indices[lo] = k;
+  }
+  const anchors = [];
+  let k = indices[tails.length-1];
+  while (k !== undefined && k >= 0) { anchors.push(candidates[k]); k = prev[k]; }
+  anchors.reverse();
+
+  function similarity(a, b) {
+    if (a === b) return 1;
+    if (!a || !b) return 0;
+    const min = Math.min(a.length,b.length), max=Math.max(a.length,b.length);
+    if (min / max < .25) return 0;
+    if (a.includes(b) || b.includes(a)) return .75 * min/max + .20;
+    const grams = new Map();
+    // A bounded sample keeps very long lines inexpensive.
+    const aa = a.slice(0, 900), bb = b.slice(0, 900);
+    for (let i=0; i<aa.length-1; i++) {
+      const g=aa.slice(i,i+2); grams.set(g,(grams.get(g)||0)+1);
+    }
+    let match=0;
+    for (let i=0; i<bb.length-1; i++) {
+      const g=bb.slice(i,i+2), n=grams.get(g)||0;
+      if(n) { match++; grams.set(g,n-1); }
+    }
+    return 2*match/Math.max(1,aa.length+bb.length-2);
+  }
+  const pairs=[];
+  function alignGap(a0,a1,b0,b1) {
+    const n=a1-a0, m=b1-b0;
+    if (!n) { for(let j=b0;j<b1;j++) pairs.push([-1,j]); return; }
+    if (!m) { for(let i=a0;i<a1;i++) pairs.push([i,-1]); return; }
+    // For large dissimilar blocks, bounded local pairing avoids O(N*M).
+    if(n*m>45000 || n+m>720) {
+      const common=Math.min(n,m);
+      for(let t=0;t<common;t++) pairs.push([a0+t,b0+t]);
+      for(let t=common;t<n;t++) pairs.push([a0+t,-1]);
+      for(let t=common;t<m;t++) pairs.push([-1,b0+t]);
+      return;
+    }
+    const width=m+1;
+    const score=new Float32Array((n+1)*(m+1));
+    const op=new Uint8Array((n+1)*(m+1));
+    for (let i=1; i<=n; i++) { score[i*width]=i; op[i*width]=1; }
+    for (let j=1; j<=m; j++) { score[j]=j; op[j]=2; }
+    for(let i=1;i<=n;i++) {
+      for(let j=1;j<=m;j++) {
+        const idx=i*width+j;
+        const s=similarity(na[a0+i-1],nb[b0+j-1]);
+        // If both nonempty lines have nothing in common, don't match them.
+        const matchCost = s < .30 ? 2.3 : 1.6 - 1.5*s;
+        let best=score[(i-1)*width+j-1]+matchCost, which=0;
+        const remove=score[(i-1)*width+j]+1;
+        const insert=score[i*width+j-1]+1;
+        if(remove<best) {best=remove;which=1;}
+        if(insert<best) {best=insert;which=2;}
+        score[idx]=best;op[idx]=which;
+      }
+    }
+    let i=n,j=m;
+    const segment=[];
+    while(i||j) {
+      const action=op[i*width+j];
+      if(i&&j&&action===0) {segment.push([a0+i-1,b0+j-1]);i--;j--;}
+      else if(i&&(action===1||!j)) {segment.push([a0+i-1,-1]);i--;}
+      else {segment.push([-1,b0+j-1]);j--;}
+    }
+    segment.reverse();pairs.push(...segment);
+  }
+  let a0=0,b0=0;
+  for(const [i,j] of anchors) {
+    alignGap(a0,i,b0,j);
+    pairs.push([i,j]);
+    a0=i+1;b0=j+1;
+  }
+  alignGap(a0,la.length,b0,lb.length);
+  return pairs;
+}
+
 function compute(left, right) {
   if (left.length > MAX_CHARS || right.length > MAX_CHARS) {
     throw new Error("The document is too large for this browser tool. Please compare smaller sections.");
@@ -351,7 +461,7 @@ function compute(left, right) {
   if (compareGap(left, right, leftEnd, left.length, rightEnd, right.length,
                  deadline, leftRanges, rightRanges)) degraded = true;
   const newlineChanges = detectNewlineChanges(left, right, A, B, alignedMatches);
-  return {leftRanges, rightRanges, ...newlineChanges, degraded};
+  return {leftRanges, rightRanges, ...newlineChanges, alignment: alignLines(left, right), degraded};
 }
 
 self.onmessage = event => {

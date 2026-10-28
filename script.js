@@ -2,221 +2,245 @@
 
 (() => {
   const textareas = [document.getElementById("left-text"), document.getElementById("right-text")];
-  const outputs = [document.getElementById("left-output"), document.getElementById("right-output")];
-  const contents = outputs.map(element => element.querySelector(".diff-text"));
-  const panes = textareas.map(element => element.closest(".pane"));
-  const compare = document.getElementById("compare");
+  const editors = [document.getElementById("left-output"), document.getElementById("right-output")];
+  const button = document.getElementById("compare");
   const status = document.getElementById("status");
-  let worker = null;
-  let currentJob = 0;
-  let stopTimer = null;
-  let highlighted = false;
-  let syncing = false;
-  const overlayTexts = ["", ""];
-  const overlayRanges = [[], []];
-  const overlayBreaks = [[], []];
-  const pendingFrames = [null, null];
+  let worker = null, jobId = 0, timeout = null;
+  let aligned = false, syncing = false, heightFrame = null;
+  let rowPairs = [];
 
   function cancelJob() {
-    ++currentJob;
-    clearTimeout(stopTimer);
-    stopTimer = null;
+    jobId++;
+    clearTimeout(timeout); timeout = null;
     if (worker) { worker.terminate(); worker = null; }
   }
 
-  function transformRanges(ranges, before, after) {
-    let prefix = 0;
-    const limit = Math.min(before.length, after.length);
-    while (prefix < limit && before.charCodeAt(prefix) === after.charCodeAt(prefix)) prefix++;
-    let oldEnd = before.length, newEnd = after.length;
-    while (oldEnd > prefix && newEnd > prefix &&
-           before.charCodeAt(oldEnd - 1) === after.charCodeAt(newEnd - 1)) {
-      oldEnd--; newEnd--;
+  function getLineText(element) {
+    // Plain content in the editable line. Ignore visual-only line-break markers.
+    if (!element.textContent && element.querySelector("br")) return "";
+    let result = "";
+    function visit(node) {
+      if (node.nodeType === Node.TEXT_NODE) { result += node.nodeValue; return; }
+      if (node.nodeType !== Node.ELEMENT_NODE) return;
+      if (node.classList && node.classList.contains("break-indicator")) return;
+      if (node.tagName === "BR") {
+        // A lone BR stands for an empty line, not an additional line.
+        if (node.parentElement !== element || element.textContent.trim() !== "") result += "\n";
+        return;
+      }
+      const isLine = node !== element && /^(DIV|P)$/.test(node.tagName);
+      if (isLine && result && !result.endsWith("\n")) result += "\n";
+      for (const child of node.childNodes) visit(child);
     }
-    const shift = newEnd - oldEnd;
-    const transformed = [];
+    for (const child of element.childNodes) visit(child);
+    return result;
+  }
+
+  function readEditor(side) {
+    if (!aligned) return textareas[side].value;
+    const lines = [];
+    for (const node of editors[side].childNodes) {
+      if (node.nodeType === Node.ELEMENT_NODE) {
+        const value = getLineText(node);
+        if (value !== null) lines.push(value);
+      } else if (node.nodeType === Node.TEXT_NODE && node.textContent) {
+        if (lines.length) lines[lines.length - 1] += node.textContent;
+        else lines.push(node.textContent);
+      }
+    }
+    return lines.join("\n");
+  }
+
+  function renderSourceLine(text, absoluteStart, ranges, changedNewlines, hasNewline) {
+    const line = document.createElement("div");
+    line.className = "aligned-line";
+    line.setAttribute("data-source", "true");
+    const absoluteEnd = absoluteStart + text.length;
+    let cursor = absoluteStart;
     for (const [start, end] of ranges) {
-      const beforeEditEnd = Math.min(end, prefix);
-      if (start < beforeEditEnd) transformed.push([start, beforeEditEnd]);
-      const afterEditStart = Math.max(start, oldEnd);
-      if (afterEditStart < end) transformed.push([afterEditStart + shift, end + shift]);
+      if (end <= absoluteStart) continue;
+      if (start >= absoluteEnd) break;
+      const lo = Math.max(start, absoluteStart), hi = Math.min(end, absoluteEnd);
+      if (lo > cursor) line.appendChild(document.createTextNode(text.slice(cursor - absoluteStart, lo - absoluteStart)));
+      if (hi > lo) {
+        const mark = document.createElement("mark");
+        mark.textContent = text.slice(lo - absoluteStart, hi - absoluteStart);
+        line.appendChild(mark);
+        cursor = hi;
+      }
     }
-    return transformed;
+    if (cursor < absoluteEnd) line.appendChild(document.createTextNode(text.slice(cursor-absoluteStart)));
+    if (!text) {
+      line.classList.add("empty");
+      line.appendChild(document.createElement("br"));
+    }
+    if (hasNewline && changedNewlines.has(absoluteEnd)) {
+      line.classList.add("break-changed");
+      if (!text) line.classList.add("blank-difference");
+      else {
+        const flag = document.createElement("span");
+        flag.className = "break-indicator";
+        flag.contentEditable = "false";
+        flag.setAttribute("aria-hidden", "true");
+        line.appendChild(flag);
+      }
+    }
+    return line;
   }
 
-  function positionOverlay(index) {
-    const textarea = textareas[index];
-    const scrollbarWidth = textarea.offsetWidth - textarea.clientWidth;
-    outputs[index].style.setProperty("--scrollbar-width", `${scrollbarWidth}px`);
-    contents[index].style.transform = `translateY(${-textarea.scrollTop}px)`;
-    contents[index].style.translate = `${-textarea.scrollLeft}px 0`;
+  function buildSourceLines(value, ranges, breaks) {
+    const lines = value.split("\n");
+    const positions = new Set(breaks || []);
+    const nodes = [];
+    let absolute = 0;
+    for (let i=0; i<lines.length; i++) {
+      nodes.push(renderSourceLine(lines[i], absolute, ranges, positions, i < lines.length-1));
+      absolute += lines[i].length + 1;
+    }
+    return nodes;
   }
 
-  function scheduleOverlayRender(index) {
-    if (pendingFrames[index] !== null) return;
-    pendingFrames[index] = requestAnimationFrame(() => {
-      pendingFrames[index] = null;
-      if (!highlighted) return;
-      renderText(contents[index], overlayTexts[index], overlayRanges[index], overlayBreaks[index]);
-      positionOverlay(index);
+  function synchronizeHeights() {
+    heightFrame = null;
+    if (!aligned) return;
+    // Align using visual spacing between actual source lines. No placeholder
+    // DOM rows are inserted, so selecting/copying never includes fake lines.
+    for (const pair of rowPairs) for (const node of pair) if(node) {
+      node.style.minHeight = "";
+      node.style.marginTop = "";
+    }
+    for(const e of editors) e.style.paddingBottom = "17px";
+    const naturalHeights = rowPairs.map(([left,right]) =>
+      Math.max(left?.offsetHeight || 0, right?.offsetHeight || 0));
+    const cursor=[0,0];
+    let targetY=0;
+    rowPairs.forEach((pair,k) => {
+      const height = Math.ceil(naturalHeights[k]);
+      for(let side=0;side<2;side++) {
+        const node=pair[side];
+        if (!node) continue;
+        const gap=Math.max(0,Math.round(targetY-cursor[side]));
+        if(gap) node.style.marginTop = `${gap}px`;
+        node.style.minHeight = `${height}px`;
+        cursor[side]=targetY+height;
+      }
+      targetY+=height;
     });
+    for(let side=0;side<2;side++) {
+      const endGap=Math.max(0,Math.round(targetY-cursor[side]));
+      editors[side].style.paddingBottom = `${17+endGap}px`;
+    }
   }
 
-  // Rebuild the text as explicit line elements. A changed newline becomes a
-  // line-level annotation. It does not depend on getBoundingClientRect() of a
-  // zero-width newline, and empty rows have their own visible background.
-  function renderText(element, text, ranges, breakPositions) {
-    const fragment = document.createDocumentFragment();
-    const changedBreaks = new Set(breakPositions);
-    let lineStart = 0;
-    let searchFrom = 0;
-    let rangeAt = 0;
-
-    for (;;) {
-      const next = text.indexOf("\n", searchFrom);
-      const lineEnd = next === -1 ? text.length : next;
-      const line = document.createElement("div");
-      line.className = "diff-line";
-      if (lineStart === lineEnd) line.classList.add("empty");
-
-      // Move the range cursor to the first range intersecting this line.
-      while (rangeAt < ranges.length && ranges[rangeAt][1] <= lineStart) rangeAt++;
-      let at = lineStart;
-      let i = rangeAt;
-      while (i < ranges.length && ranges[i][0] < lineEnd) {
-        const [rawStart, rawEnd] = ranges[i];
-        const start = Math.max(lineStart, rawStart);
-        const end = Math.min(lineEnd, rawEnd);
-        if (start > at) line.appendChild(document.createTextNode(text.slice(at, start)));
-        if (end > start) {
-          const mark = document.createElement("mark");
-          mark.textContent = text.slice(start, end);
-          line.appendChild(mark);
-          at = end;
-        }
-        i++;
-      }
-      if (at < lineEnd) line.appendChild(document.createTextNode(text.slice(at, lineEnd)));
-
-      if (next !== -1) {
-        // Mark only confirmed structural newline differences. Other edits
-        // may include a newline in their text range, but that alone does not
-        // mean the line break has changed between the documents.
-        if (changedBreaks.has(next)) {
-          line.classList.add("break-changed");
-          if (lineStart < lineEnd) {
-            // The indicator is visual only; it contributes no character and
-            // does not affect the editor's line breaks or column positions.
-            const indicator = document.createElement("span");
-            indicator.className = "break-indicator";
-            indicator.setAttribute("aria-hidden", "true");
-            line.appendChild(indicator);
-          }
-        }
-      }
-      fragment.appendChild(line);
-      if (next === -1) break;
-      searchFrom = next + 1;
-      lineStart = searchFrom;
-    }
-    element.replaceChildren(fragment);
+  function scheduleHeights() {
+    if (heightFrame != null) return;
+    heightFrame = requestAnimationFrame(synchronizeHeights);
   }
 
-  function showResults(data, values) {
-    for (let i = 0; i < 2; i++) {
-      if (pendingFrames[i] !== null) {
-        cancelAnimationFrame(pendingFrames[i]);
-        pendingFrames[i] = null;
-      }
-      overlayTexts[i] = values[i];
-      overlayRanges[i] = (i === 0 ? data.leftRanges : data.rightRanges);
-      overlayBreaks[i] = (i === 0 ? data.leftBreaks : data.rightBreaks) || [];
-      renderText(contents[i], overlayTexts[i], overlayRanges[i], overlayBreaks[i]);
+  function renderResults(result, values) {
+    const source = [
+      buildSourceLines(values[0], result.leftRanges, result.leftBreaks),
+      buildSourceLines(values[1], result.rightRanges, result.rightBreaks)
+    ];
+    const fragments = [document.createDocumentFragment(),document.createDocumentFragment()];
+    const pairs=[];
+    // A limited fallback is still usable when the comparison engine does not
+    // provide structural anchors (for example an older worker is cached).
+    const alignment = result.alignment || Array.from({length:Math.max(source[0].length,source[1].length)},(_,i)=>[
+      i<source[0].length?i:-1, i<source[1].length?i:-1
+    ]);
+    for (const [a,b] of alignment) {
+      const ln = a < 0 ? null : source[0][a];
+      const rn = b < 0 ? null : source[1][b];
+      if (ln) fragments[0].appendChild(ln);
+      if (rn) fragments[1].appendChild(rn);
+      pairs.push([ln,rn]);
     }
-    for (let i = 0; i < 2; i++) {
-      outputs[i].hidden = false;
-      panes[i].classList.add("has-diff");
-      positionOverlay(i);
+    for (let i=0;i<2;i++) {
+      editors[i].replaceChildren(fragments[i]);
+      editors[i].hidden=false;
+      textareas[i].hidden=true;
     }
-    highlighted = true;
-    status.textContent = "Comparison complete.";
+    rowPairs = pairs;
+    aligned = true;
+    synchronizeHeights();
+    editors[0].scrollTop = editors[1].scrollTop = 0;
+    status.textContent = "Comparison complete. Both sides remain editable.";
   }
 
-  function runComparison() {
+  function runCompare() {
     cancelJob();
-    const job = currentJob;
-    const values = textareas.map(element => element.value);
+    const thisJob=jobId;
+    const values=[readEditor(0),readEditor(1)];
     status.textContent = "Comparing texts.";
     try {
-      const newWorker = new Worker("diff-worker.js?v=newline-fixed-20261022-5");
-      worker = newWorker;
-      newWorker.onmessage = event => {
-        if (job !== currentJob) return;
-        clearTimeout(stopTimer); stopTimer = null;
-        newWorker.terminate(); worker = null;
-        if (event.data.error) {
-          status.textContent = event.data.error;
-          window.alert(event.data.error);
-          return;
-        }
-        requestAnimationFrame(() => {
-          if (job === currentJob) showResults(event.data, values);
-        });
+      const running = new Worker("diff-worker.js?v=aligned-20261028-1");
+      worker=running;
+      running.onmessage = evt => {
+        if (thisJob!==jobId) return;
+        clearTimeout(timeout);timeout=null;
+        running.terminate();worker=null;
+        if (evt.data.error) {status.textContent=evt.data.error; window.alert(evt.data.error);return;}
+        requestAnimationFrame(()=>{if(thisJob===jobId) renderResults(evt.data,values);});
       };
-      newWorker.onerror = () => {
-        if (job !== currentJob) return;
-        cancelJob();
-        status.textContent = "Comparison failed.";
-        window.alert("The comparison could not be completed in this browser.");
+      running.onerror = () => {
+        if(thisJob!==jobId)return;
+        cancelJob();status.textContent="Comparison failed.";
+        window.alert("This comparison could not be completed in the browser.");
       };
-      stopTimer = setTimeout(() => {
-        if (job !== currentJob) return;
-        cancelJob();
-        status.textContent = "Comparison timed out.";
+      timeout=setTimeout(()=>{
+        if(thisJob!==jobId)return;
+        cancelJob();status.textContent="Comparison timed out.";
         window.alert("This comparison exceeded the processing time limit. Try comparing smaller sections.");
-      }, 30000);
-      newWorker.postMessage({left: values[0], right: values[1]});
+      },30000);
+      running.postMessage({left:values[0],right:values[1]});
     } catch (_) {
-      cancelJob();
-      status.textContent = "Comparison failed.";
+      cancelJob();status.textContent="Comparison failed.";
       window.alert("Your browser could not start the comparison worker.");
     }
   }
 
-  compare.addEventListener("click", runComparison);
-  for (let i = 0; i < 2; i++) {
-    textareas[i].addEventListener("input", () => {
+  button.addEventListener("click",runCompare);
+  for(let i=0;i<2;i++) {
+    textareas[i].addEventListener("input",cancelJob);
+    editors[i].addEventListener("input", e => {
       cancelJob();
-      if (highlighted) {
-        const nextText = textareas[i].value;
-        if (nextText !== overlayTexts[i]) {
-          overlayBreaks[i] = transformRanges(
-            overlayBreaks[i].map(p => [p, p + 1]), overlayTexts[i], nextText
-          ).filter(r => r[1] - r[0] === 1 && nextText[r[0]] === "\n")
-            .map(r => r[0]);
-          overlayRanges[i] = transformRanges(overlayRanges[i], overlayTexts[i], nextText);
-          overlayTexts[i] = nextText;
-          scheduleOverlayRender(i);
-        }
+      // Keep untouched highlights on other lines, remove stale ones only
+      // from the source line being edited.
+      const selection=window.getSelection();
+      const node=selection && selection.anchorNode;
+      const row=node && (node.nodeType===Node.ELEMENT_NODE?node:node.parentElement)?.closest?.(".aligned-line");
+      if (row && editors[i].contains(row)) {
+        for(const mark of Array.from(row.querySelectorAll("mark"))) mark.replaceWith(...Array.from(mark.childNodes));
+        row.querySelectorAll(".break-indicator").forEach(x=>x.remove());
+        row.classList.remove("break-changed","blank-difference");
       }
-      status.textContent = "Text edited. Press Compare to refresh the differences.";
+      scheduleHeights();
+      status.textContent="Text edited. Press Compare to refresh differences.";
     });
-    textareas[i].addEventListener("scroll", () => {
-      if (!highlighted) return;
-      positionOverlay(i);
-      if (syncing) return;
-      syncing = true;
-      const otherIndex = 1 - i;
-      const source = textareas[i];
-      const target = textareas[otherIndex];
-      const scrollRange = source.scrollHeight - source.clientHeight;
-      const targetRange = target.scrollHeight - target.clientHeight;
-      target.scrollTop = scrollRange > 0 ? (source.scrollTop / scrollRange) * targetRange : 0;
-      positionOverlay(otherIndex);
-      requestAnimationFrame(() => { syncing = false; });
-    }, {passive: true});
+    editors[i].addEventListener("paste", e => {
+      const plaintext=e.clipboardData?.getData("text/plain");
+      if(plaintext===undefined)return;
+      e.preventDefault();
+      // Paste text, never HTML from Word/Excel. Plain text preserves newlines.
+      document.execCommand("insertText",false,plaintext);
+    });
+    const scrollTarget = aligned => aligned ? editors[i] : textareas[i];
+    const onScroll = event => {
+      if(syncing)return;
+      syncing=true;
+      const source=event.currentTarget;
+      const target=aligned?editors[1-i]:textareas[1-i];
+      if (aligned) target.scrollTop=source.scrollTop;
+      else {
+        const s=Math.max(0,source.scrollHeight-source.clientHeight);
+        const t=Math.max(0,target.scrollHeight-target.clientHeight);
+        target.scrollTop=s?source.scrollTop/s*t:0;
+      }
+      requestAnimationFrame(()=>{syncing=false;});
+    };
+    textareas[i].addEventListener("scroll",onScroll,{passive:true});
+    editors[i].addEventListener("scroll",onScroll,{passive:true});
   }
-  window.addEventListener("resize", () => {
-    if (highlighted) for (let i = 0; i < 2; i++) positionOverlay(i);
-  });
+  window.addEventListener("resize",scheduleHeights);
 })();

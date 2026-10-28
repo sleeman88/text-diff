@@ -70,3 +70,34 @@ button:hover { background: #115a9f; }
 button:focus-visible { outline: 3px solid #80acf6; outline-offset: 3px; }
 .visually-hidden { position: absolute !important; height: 1px; width: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 @media (max-width: 700px) { .workspace { padding: 12px; } .panes { grid-template-columns: minmax(0,1fr); gap: 12px; } .pane { height: 38vh; min-height: 180px; } .actions { margin-top: 12px; } }
+
+/* Aligned, in-place editable view. The spacer elements have no text and do
+   not change the user's original content. */
+.pane textarea[hidden], .pane .aligned-editor[hidden] { display: none !important; }
+.pane .aligned-editor {
+  position: absolute; inset: 0; display: block; padding: 17px 18px;
+  overflow: auto; outline: none; color: #182234; background: #fff;
+  font-family: "Segoe UI", Arial, sans-serif; font-size: 15px;
+  line-height: 1.65; letter-spacing: .003em; tab-size: 4;
+  white-space: pre-wrap; overflow-wrap: anywhere; word-break: normal;
+  font-weight: 400; font-variant-ligatures: none;
+}
+.aligned-line, .aligned-spacer { display: block; position: relative; min-height: 1.65em; white-space: pre-wrap; overflow-wrap: anywhere; }
+.aligned-line mark { background: transparent; border-radius: 2px; color: #142236;
+  -webkit-text-stroke: .38px currentColor;
+  text-shadow: .23px 0 currentColor, -.23px 0 currentColor;
+  font-weight: inherit; text-decoration: none; box-decoration-break: clone;
+}
+.aligned-editor.removed mark { background: #ffe1ae; }
+.aligned-editor.added mark { background: #c7e7ff; }
+
+.aligned-editor.removed .aligned-line.blank-difference {
+  background: #ffe7c0; box-shadow: inset 4px 0 #d99732;
+}
+.aligned-editor.added .aligned-line.blank-difference {
+  background: #d9efff; box-shadow: inset 4px 0 #4a9bd7;
+}
+.aligned-line .break-indicator { display: inline; position: relative; pointer-events: none; }
+.aligned-line .break-indicator::after { content: ""; position: absolute; left: 0; bottom: -.1em;
+  width: 2px; height: .95em; background: #bd4343; pointer-events: none; }
+.aligned-line mark::before, .aligned-line mark::after { content: none !important; }
